@@ -1,0 +1,60 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:jason, "~> 1.4"},
+  {:fit_decoder, path: "/home/kuku/Projects/fit_decoder"},
+  {:fitreader, path: "/home/kuku/Projects/fitreader-elixir"},
+  {:kino, "~> 0.11.3"}
+])
+```
+
+## Section
+
+```elixir
+# %{
+#  "CommonFields" => common_fields,
+#  "MesgNum" => mesg_num,
+#  "messages" => messages,
+#  "types" => types,
+#  "version" => version
+# } 
+"/home/kuku/Projects/fit_decoder/priv/fit.json"
+|> File.read!()
+|> Jason.decode!()
+|> Kino.Tree.new()
+```
+
+```elixir
+{:ok, fit} =
+  "/home/kuku/Projects/fit_decoder/11240774353_ACTIVITY.fit"
+  |> Fit.read()
+
+fit
+|> Fit.digest()
+|> Kino.Tree.new()
+```
+
+```elixir
+fit
+|> Fit.record(20)
+|> Kino.Tree.new()
+```
+
+```elixir
+
+```
+
+```elixir
+ExUnit.start(autorun: false)
+
+defmodule BTest do
+  use ExUnit.Case
+
+  test "abc" do
+    assert %{ata: [a: :b, c: 123]} == %{ata: [a: :c, c: 123]}
+  end
+end
+
+ExUnit.run()
+```

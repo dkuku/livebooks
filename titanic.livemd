@@ -1,0 +1,107 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:req, "~> 0.3.6"},
+  {:explorer, "~> 0.5.6"},
+  {:kino_explorer, "~> 0.1.4"},
+  {:nx, "~> 0.5.1"},
+  {:kino_vega_lite, path: "/home/kuku/Projects/kino_vega_lite"}
+  # {:kino_vega_lite, "~> 0.1.7"}
+])
+```
+
+## Section
+
+```elixir
+response =
+  Req.get!(
+    "https://gist.githubusercontent.com/fyyying/4aa5b471860321d7b47fd881898162b7/raw/6907bb3a38bfbb6fccf3a8b1edfb90e39714d14f/titanic_dataset.csv"
+  )
+```
+
+```elixir
+require Explorer.DataFrame, as: DF
+alias Explorer.Series
+titanic = DF.load_csv!(response.body)
+```
+
+```elixir
+tidy_names = fn name ->
+  name
+  |> String.downcase()
+  |> String.replace(~r/\s/, " ")
+  |> String.replace(~r/[^A-Za-z\s]/, "")
+  |> String.replace(" ", "_")
+end
+```
+
+```elixir
+get_title = fn name ->
+  case Regex.run(~r' ([A-Za-z]+)\.', name) do
+    [_, title] when title == "Mme" -> "Mrs"
+    [_, title] when title in ~w[Mlle Ms] -> "Miss"
+    [_, title] when title in ~w[Miss Mrs Mr Master] -> title
+    [_, _other] -> "Other"
+  end
+end
+```
+
+```elixir
+modified =
+  titanic
+  |> DF.rename_with(tidy_names)
+  |> DF.mutate(%{
+    named_cabin?: not is_nil(cabin),
+    female?: cast(sex, :category),
+    embarked: cast(Series.fill_missing(embarked, :max), :category),
+    age_category: cast(divide(Series.fill_missing(age, :mean), 10), :integer),
+    normalized_fare: log(fare) / max(log(fare))
+  })
+  |> DF.put(:title, Series.cast(Series.transform(titanic["Name"], &get_title.(&1)), :category))
+
+modified
+|> DF.concat_columns(DF.dummies(modified, "title"))
+```
+
+```elixir
+alias VegaLite, as: Vl
+
+Vl.new(width: 2000)
+|> Vl.data_from_values(modified, only: ["fare", "age_category", "parch", "survived"])
+|> Vl.repeat(
+  [
+    row: ["fare", "age_category", "parch", "survived"],
+    column: ["fare", "age_category", "parch", "survived"]
+  ],
+  Vl.new()
+  |> Vl.mark(:point)
+  # The graphic will be repeated for every combination of :x and :y
+  # taken from the :row and :column lists above
+  |> Vl.encode_repeat(:x, :column, type: :quantitative)
+  |> Vl.encode_repeat(:y, :row, type: :quantitative)
+  |> Vl.encode_field(:color, "survived", type: :quantitative)
+)
+```
+
+<!-- livebook:{"attrs":{"chart_title":null,"height":null,"layers":[{"active":true,"chart_type":"point","color_field":"survived","color_field_aggregate":null,"color_field_bin":5,"color_field_scale_scheme":"pastel1","color_field_type":"quantitative","data_variable":"modified","geodata_color":"blue","latitude_field":null,"longitude_field":null,"x_field":"normalized_fare","x_field_aggregate":null,"x_field_bin":null,"x_field_scale_type":null,"x_field_type":"quantitative","y_field":"age","y_field_aggregate":null,"y_field_bin":null,"y_field_scale_type":null,"y_field_type":"quantitative"}],"vl_alias":"Elixir.Vl","width":1000},"chunks":null,"kind":"Elixir.KinoVegaLite.ChartCell","livebook_object":"smart_cell"} -->
+
+```elixir
+Vl.new(width: 1000)
+|> Vl.data_from_values(modified, only: ["normalized_fare", "age", "survived"])
+|> Vl.mark(:point)
+|> Vl.encode_field(:x, "normalized_fare", type: :quantitative)
+|> Vl.encode_field(:y, "age", type: :quantitative)
+|> Vl.encode_field(:color, "survived",
+  type: :quantitative,
+  bin: [maxbins: 5],
+  scale: [scheme: "pastel1"]
+)
+```
+
+```elixir
+a = DF.new(a: ["1", "2", "6"])
+b = a["a"]
+c = Series.from_list([[1, 2], [3.4]])
+DF.new(a: [1, 2, 3])
+```

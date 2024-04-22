@@ -1,0 +1,228 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:kino_db, "~> 0.2.1"},
+  {:ayesql, "~> 1.1"},
+  {:postgrex, "~> 0.16.3"},
+  {:kino_maplibre, "~> 0.1.7"},
+  {:ecto, "~> 3.9.4"}
+])
+```
+
+## Section
+
+<!-- livebook:{"attrs":{"database":"Adventureworks","hostname":"localhost","password_secret":"","port":5432,"type":"postgres","use_ipv6":false,"username":"kuku","variable":"conn"},"chunks":null,"kind":"Elixir.KinoDB.ConnectionCell","livebook_object":"smart_cell"} -->
+
+```elixir
+opts = [
+  hostname: "localhost",
+  port: 5432,
+  username: "kuku",
+  password: "",
+  database: "Adventureworks"
+]
+
+{:ok, conn} = Kino.start_child({Postgrex, opts})
+```
+
+```elixir
+result = Postgrex.query!(conn, "select version()", [])
+```
+
+```elixir
+defmodule SQLNamePattern do
+  @special_chars ~c/| * + ? ( ) [ ] { } . ^ \\ /
+  @wildcard "*.*"
+
+  def parse(pattern) do
+    parse_pattern(pattern, false, "", "")
+  end
+
+  defp parse_pattern("", _in_quotes, schema, relname) do
+    %{schema: wrap(schema), relname: wrap(relname)}
+  end
+
+  defp parse_pattern(<<?", ?">> <> t, true, schema, relname) do
+    parse_pattern(t, true, schema, relname <> <<?">>)
+  end
+
+  defp parse_pattern(<<?">> <> t, in_quotes, schema, relname) do
+    parse_pattern(t, not in_quotes, schema, relname)
+  end
+
+  defp parse_pattern(<<?$>> <> t, in_quotes, schema, relname) do
+    parse_pattern(t, in_quotes, schema, relname <> <<?\\, ?$>>)
+  end
+
+  defp parse_pattern(<<c>> <> t, true, schema, relname) when c in @special_chars do
+    parse_pattern(t, true, schema, relname <> <<?\\, c>>)
+  end
+
+  defp parse_pattern(<<?*>> <> t, false, schema, relname) do
+    parse_pattern(t, false, schema, relname <> <<?., ?*>>)
+  end
+
+  defp parse_pattern(<<??>> <> t, false, schema, relname) do
+    parse_pattern(t, false, schema, relname <> <<?.>>)
+  end
+
+  defp parse_pattern(<<?.>> <> t, false, schema, relname) do
+    # Found schema/name separator, move current pattern to schema
+    parse_pattern(t, false, relname, "")
+  end
+
+  defp parse_pattern(<<c>> <> t, true, schema, relname) do
+    parse_pattern(t, true, schema, relname <> <<c>>)
+  end
+
+  defp parse_pattern(<<c>> <> t, false, schema, relname) do
+    parse_pattern(t, false, schema, relname <> String.downcase(<<c>>))
+  end
+
+  defp wrap(""), do: ".*"
+  defp wrap("*"), do: ".*"
+  defp wrap(string), do: "^(" <> string <> ")$"
+end
+
+SQLNamePattern.parse(~s/foO*."b""$aR*"/)
+```
+
+```elixir
+~w/| * + ? ( ) [ ] { } . ^ \\ /
+```
+
+```elixir
+patterns = [
+  "test",
+  "test*",
+  "test.test",
+  "test.test*",
+  ~s/foo*."b""$ar*"/,
+  ~s/foO*."b""$aR*"/
+]
+
+Enum.map(patterns, &SQLNamePattern.parse/1)
+```
+
+```elixir
+defmodule Queries do
+  alias SQLNamePattern, as: P
+  use AyeSQL, runner: AyeSQL.Runner.Postgrex
+
+  # File name with relative path to SQL file.
+  defqueries("queries.sql")
+end
+```
+
+```elixir
+defmodule Slash do
+  @wildcard "*.*"
+  alias SQLNamePattern, as: P
+
+  def l(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+    Queries.list_databases_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def l_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+    Queries.list_databases_verbose_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def du(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+    Queries.list_roles_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def du_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+    Queries.list_roles_verbose_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def dn(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+    Queries.list_schemas_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def dn_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+    Queries.list_schemas_verbose_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def ddp(conn, pattern \\ @wildcard) do
+    Queries.list_schemas_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def db(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+
+    Queries.list_tablespaces_pattern!([pattern: pattern], conn: conn)
+  end
+
+  def de(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+
+    Queries.list_extensions!([pattern: pattern], conn: conn)
+  end
+
+  def de_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern} = P.parse(pattern)
+
+    Queries.list_extensions_verbose!([pattern: pattern], conn: conn)
+  end
+
+  def dt(conn, pattern \\ @wildcard) do
+    %{relname: pattern, schema: schema} = P.parse(pattern)
+
+    Queries.list_objects!([pattern: pattern, schema_pattern: schema, relkinds: {:in, ["r", "p"]}],
+      conn: conn
+    )
+  end
+
+  def dt_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern, schema: schema} = P.parse(pattern)
+
+    Queries.list_objects_verbose!(
+      [pattern: pattern, schema_pattern: schema, relkinds: {:in, ["r", "p"]}],
+      conn: conn
+    )
+  end
+
+  def dv(conn, pattern \\ "*.*") do
+    %{relname: pattern, schema: schema} = P.parse(pattern)
+
+    Queries.list_objects!([pattern: pattern, schema_pattern: schema, relkinds: {:in, ["v", "s"]}],
+      conn: conn
+    )
+  end
+
+  def dv_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern, schema: schema} = P.parse(pattern)
+
+    Queries.list_objects_verbose!(
+      [pattern: pattern, schema_pattern: schema, relkinds: {:in, ["v", "s"]}],
+      conn: conn
+    )
+  end
+
+  def di(conn, pattern \\ @wildcard) do
+    %{relname: pattern, schema: schema} = P.parse(pattern)
+
+    Queries.list_objects!([pattern: pattern, schema_pattern: schema, relkinds: {:in, ["i", "s"]}],
+      conn: conn
+    )
+  end
+
+  def di_plus(conn, pattern \\ @wildcard) do
+    %{relname: pattern, schema: schema} = P.parse(pattern)
+
+    Queries.list_objects_verbose!(
+      [pattern: pattern, schema_pattern: schema, relkinds: {:in, ["i", "s"]}],
+      conn: conn
+    )
+  end
+end
+
+Slash.dt_plus(conn)
+```

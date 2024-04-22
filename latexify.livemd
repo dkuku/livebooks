@@ -1,0 +1,191 @@
+# Untitled notebook
+
+```elixir
+Mix.install([:evision, :kino])
+```
+
+## Section
+
+```elixir
+smartcells = Evision.SmartCell.available_smartcells()
+Evision.SmartCell.register_smartcells(smartcells)
+```
+
+<!-- livebook:{"attrs":{"conf_threshold":0.9,"cosine_threshold":0.363,"detector":"yunet","distance_type":"cosine_similarity","l2_norm_threshold":1.128,"nms_threshold":0.3,"task_id":"face_recognition","top_k":5000,"variant_id":"sface"},"chunks":[[0,513],[515,3072]],"kind":"Elixir.Evision.SmartCell.Zoo","livebook_object":"smart_cell"} -->
+
+```elixir
+recognizer =
+  Evision.Zoo.FaceRecognition.SFace.init(:default_model,
+    backend: Evision.Constant.cv_DNN_BACKEND_OPENCV(),
+    target: Evision.Constant.cv_DNN_TARGET_CPU(),
+    distance_type: :cosine_similarity,
+    cosine_threshold: 0.363,
+    l2_norm_threshold: 1.128
+  )
+
+detector =
+  Evision.Zoo.FaceDetection.YuNet.init(:default_model,
+    backend: Evision.Constant.cv_DNN_BACKEND_OPENCV(),
+    target: Evision.Constant.cv_DNN_TARGET_CPU(),
+    nms_threshold: 0.3,
+    conf_threshold: 0.9,
+    top_k: 5
+  )
+
+original_input = Kino.Input.image("Original")
+comparison_input = Kino.Input.image("Comparison")
+
+form =
+  Kino.Control.form([original: original_input, comparison: comparison_input],
+    submit: "Run"
+  )
+
+frame = Kino.Frame.new()
+
+form
+|> Kino.Control.stream()
+|> Stream.filter(&(&1.data.original != nil or &1.data.comparison != nil))
+|> Kino.listen(fn %{data: %{original: original_image, comparison: comparison_image}} ->
+  Kino.Frame.render(frame, Kino.Markdown.new("Running..."))
+
+  original_image =
+    Evision.Mat.from_binary(
+      original_image.data,
+      {:u, 8},
+      original_image.height,
+      original_image.width,
+      3
+    )
+
+  comparison_image =
+    Evision.Mat.from_binary(
+      comparison_image.data,
+      {:u, 8},
+      comparison_image.height,
+      comparison_image.width,
+      3
+    )
+
+  original_results = Evision.Zoo.FaceDetection.YuNet.infer(detector, original_image)
+  comparison_results = Evision.Zoo.FaceDetection.YuNet.infer(detector, comparison_image)
+
+  case {original_results, comparison_results} do
+    {%Evision.Mat{}, %Evision.Mat{}} ->
+      original_bbox = Nx.reverse(Evision.Mat.to_nx(original_results, Nx.BinaryBackend)[0])
+
+      comparison_bbox = Nx.reverse(Evision.Mat.to_nx(comparison_results, Nx.BinaryBackend)[0])
+
+      original_feature =
+        Evision.Zoo.FaceRecognition.SFace.infer(recognizer, original_image, original_bbox)
+
+      comparison_feature =
+        Evision.Zoo.FaceRecognition.SFace.infer(
+          recognizer,
+          comparison_image,
+          comparison_bbox
+        )
+
+      %{matched: matched, retval: val, measure: measure} =
+        Evision.Zoo.FaceRecognition.SFace.match_feature(
+          recognizer,
+          original_feature,
+          comparison_feature
+        )
+
+      original_image = Evision.cvtColor(original_image, Evision.Constant.cv_COLOR_RGB2BGR())
+
+      comparison_image = Evision.cvtColor(comparison_image, Evision.Constant.cv_COLOR_RGB2BGR())
+
+      vis_original =
+        Evision.Zoo.FaceDetection.YuNet.visualize(original_image, original_results[0])
+
+      vis_comparison =
+        Evision.Zoo.FaceDetection.YuNet.visualize(comparison_image, comparison_results[0])
+
+      vis = [
+        Kino.Image.new(Evision.imencode(".png", vis_original), :png),
+        Kino.Image.new(Evision.imencode(".png", vis_comparison), :png)
+      ]
+
+      Kino.Frame.render(frame, Kino.Layout.grid(vis, columns: 2))
+
+      Kino.Frame.append(
+        frame,
+        Kino.Markdown.new("Result: #{matched}, #{measure}: #{val}")
+      )
+
+    {{:error, _}, %Evision.Mat{}} ->
+      Kino.Frame.render(
+        frame,
+        Kino.Markdown.new("Cannot detect any face in the original image")
+      )
+
+    {%Evision.Mat{}, _} ->
+      Kino.Frame.render(
+        frame,
+        Kino.Markdown.new("Cannot detect any face in the comparison image")
+      )
+
+    {_, _} ->
+      Kino.Frame.render(
+        frame,
+        Kino.Markdown.new("Cannot detect any face in both original and comparison images")
+      )
+  end
+end)
+
+Kino.Layout.grid([form, frame], boxed: true, gap: 16)
+```
+
+<!-- livebook:{"attrs":{},"chunks":null,"kind":"Elixir.Evision.SmartCell.ML.RTrees","livebook_object":"smart_cell"} -->
+
+```elixir
+rtree =
+  Evision.ML.RTrees.create()
+  |> Evision.ML.RTrees.setMaxDepth(4)
+  |> Evision.ML.RTrees.setMaxCategories(2)
+  |> Evision.ML.RTrees.setCVFolds(0)
+  |> Evision.ML.RTrees.setMinSampleCount(10)
+  |> Evision.ML.RTrees.setActiveVarCount(0)
+  |> Evision.ML.RTrees.setCalculateVarImportance(false)
+
+rtree = Evision.ML.RTrees.setTermCriteria(rtree, {Evision.Constant.cv_MAX_ITER(), 10, 0})
+
+(
+  (
+    dataset =
+      Evision.ML.TrainData.create(
+        Evision.Mat.from_nx(Nx.tensor(nil, type: :f32, backend: Evision.Backend)),
+        Evision.Constant.cv_ROW_SAMPLE(),
+        Evision.Mat.from_nx(Nx.tensor(nil, type: :s32, backend: Evision.Backend))
+      )
+      |> Evision.ML.TrainData.setTrainTestSplitRatio(0.8, shuffle: true)
+
+    IO.puts("#Samples: #{Evision.ML.TrainData.getNSamples(dataset)}")
+    IO.puts("#Training samples: #{Evision.ML.TrainData.getNTrainSamples(dataset)}")
+    IO.puts("#Test samples: #{Evision.ML.TrainData.getNTestSamples(dataset)}")
+  )
+
+  Evision.ML.RTrees.train(rtree, dataset)
+
+  (
+    rtree
+    |> Evision.ML.SVM.calcError(dataset, false)
+    |> then(fn r ->
+      case r do
+        {:error, error_message} -> raise error_message
+        {error, _} -> IO.puts("Training Error: #{error}")
+      end
+    end)
+
+    rtree
+    |> Evision.ML.SVM.calcError(dataset, true)
+    |> then(fn r ->
+      case r do
+        {:error, error_message} -> raise error_message
+        {error, _} -> IO.puts("Test Error: #{error}")
+      end
+    end)
+  )
+)
+```

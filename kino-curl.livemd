@@ -1,0 +1,102 @@
+# KinoCurl
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.12.3"},
+  {:req, "~> 0.4.14"}
+])
+```
+
+## Sectionw
+
+```elixir
+defmodule CurlParser do
+  def parse(input) do
+    {
+      opts,
+      ["curl", url] ++ argv,
+      errors
+    } =
+      input
+      |> OptionParser.split()
+      |> OptionParser.parse(
+        aliases: [{:H, :header}, {:X, :method}],
+        switches: [
+          header: :keep,
+          url: :string,
+          compressed: :boolean,
+          data_raw: :string,
+          method: :string
+        ],
+        allow_nonexistent_atoms: true
+      )
+
+    %{
+      url: url,
+      headers: Keyword.get_values(opts, :header),
+      parsed_headers:
+        Keyword.get_values(opts, :header) |> Map.new(&List.to_tuple(String.split(&1, ": "))),
+      method: Keyword.get(opts, :method, "get") |> String.downcase() |> String.to_atom(),
+      body: Keyword.get(opts, :data_raw),
+      errors: errors,
+      argv: argv
+    }
+  end
+end
+```
+
+```elixir
+inputs = [
+  curl: Kino.Input.textarea("curl", monospace: true)
+]
+
+form = Kino.Control.form(inputs, submit: "Send", reset_on_submit: [:message])
+# parse the data and create a form similar to request in postman when it imports curl
+```
+
+```elixir
+frame = Kino.Frame.new()
+```
+
+```elixir
+Kino.listen(form, fn %{data: %{curl: curl}, origin: _origin} ->
+  if curl != "" do
+    Kino.Frame.clear(frame)
+    curl = CurlParser.parse(curl)
+
+    url = Kino.Input.url("url", default: curl.url)
+
+    method =
+      Kino.Input.select(
+        "Method",
+        [
+          get: "get",
+          post: "post",
+          put: "put",
+          delete: "delete",
+          options: "options",
+          head: "head"
+        ],
+        default: curl.method
+      )
+
+    Kino.Frame.append(frame, method)
+    Kino.Frame.append(frame, url)
+
+    for header <- curl.headers do
+      Kino.Frame.append(frame, header)
+    end
+
+    {:ok, resp} =
+      Req.request(
+        method: curl.method,
+        url: curl.url,
+        headers: curl.parsed_headers,
+        body: curl.body
+      )
+
+    html = Kino.HTML.new(resp.body)
+    Kino.Frame.append(frame, html)
+  end
+end)
+```

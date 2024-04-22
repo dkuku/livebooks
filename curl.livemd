@@ -1,0 +1,154 @@
+# Untitled notebook
+
+```elixir
+Mix.install([:req, :kino, :ex_curl])
+```
+
+## Section
+
+```elixir
+defmodule Kino.HTML do
+  use Kino.JS
+
+  def new(html) do
+    Kino.JS.new(__MODULE__, html)
+  end
+
+  asset "main.js" do
+    """
+    export function init(ctx, html) {
+      ctx.importCSS("https://fonts.googleapis.com/css?family=Sofia")
+      ctx.importCSS("main.css")
+
+      ctx.root.innerHTML = html;
+    }
+    """
+  end
+end
+```
+
+```elixir
+command = """
+curl 'https://syndication.twitter.com/settings?session_id=70900fc8114f519e23e3c9873f1d7fa89301f555' \
+  -H 'authority: syndication.twitter.com' \
+  -H 'accept: */*' \
+  -H 'accept-language: en-GB,en-US;q=0.9,en;q=0.8,la;q=0.7' \
+  -H 'cookie: dnt=1; auth_token=8214807e5dc12619d39f4a2a19721844f645d53e; twid=u%3D67876871' \
+  -H 'dnt: 1' \
+  -H 'origin: https://platform.twitter.com' \
+  -H 'referer: https://platform.twitter.com/' \
+  -H 'sec-ch-ua: "Not?A_Brand";v="8", "Chromium";v="108"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "Linux"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: same-site' \
+  -H 'user-agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' \
+  --compressed
+"""
+
+{params, ["curl", url], rest} =
+  command
+  |> OptionParser.split()
+  |> OptionParser.parse(
+    aliases: [H: :header, A: :user_agent],
+    strict: [header: :keep, user_agent: :string, compressed: :boolean]
+  )
+
+headers =
+  params
+  |> Enum.reduce([], fn {:header, str}, acc ->
+    [k, v] = String.split(str, ": ")
+    [{k, v} | acc]
+  end)
+
+Req.get!(url, headers: headers)
+```
+
+```elixir
+aliases = [H: :header, A: :user_agent, d: :data, u: :user, I: :head, X: :method, b: :cookie]
+
+strict = [
+  data: :string,
+  data_raw: :string,
+  data_ascii: :string,
+  method: :string,
+  header: :keep,
+  user: :string,
+  user_agent: :string,
+  data_raw: :string,
+  globoff: :boolean,
+  compressed: :boolean
+]
+
+command = """
+curl 'https://httpbin.org/post' \
+-X POST \
+-H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/109.0' \
+-H 'Accept: application/json' \
+-H 'Accept-Language: en-US,en;q=0.5' \
+-H 'Accept-Encoding: gzip, deflate, br' \
+-H 'Referer: https://httpbin.org/' \
+-H 'Origin: https://httpbin.org' \
+-H 'DNT: 1' \
+-H 'Connection: keep-alive' \
+-H 'Sec-Fetch-Dest: empty' \
+-H 'Sec-Fetch-Mode: cors' \
+-H 'Sec-Fetch-Site: same-origin' \
+-H 'Content-Length: 0' \
+-H 'TE: trailers' \
+"""
+
+{params, ["curl", url], rest} =
+  command
+  |> OptionParser.split()
+  |> OptionParser.parse(aliases: aliases, strict: strict)
+  |> IO.inspect()
+
+headers =
+  params
+  |> Enum.reduce([], fn
+    {:header, str}, acc ->
+      [k, v] = String.split(str, ": ")
+      [{k, v} | acc]
+
+    {_, _}, acc ->
+      acc
+  end)
+
+options =
+  params
+  |> Enum.reduce([], fn
+    {:header, _}, acc ->
+      acc
+
+    {:method, _}, acc ->
+      acc
+
+    {:compressed, _}, acc ->
+      acc
+
+    {:globoff, _}, acc ->
+      acc
+
+    {:data_raw, data}, acc ->
+      [{:body, data} | acc]
+
+    {:method, _}, acc ->
+      acc
+  end)
+
+method =
+  params
+  |> Keyword.get(:method, "GET")
+  |> case do
+    "POST" -> :post!
+    "PUT" -> :put!
+    _ -> :get!
+  end
+
+# %{body: body} = apply(Req, method, [url, [{:headers, headers} | options]])
+%{body: body} = apply(ExCurl, method, [url, [{:headers, Map.new(headers)} | options]])
+# body = :zlib.gunzip(body)
+# Kino.HTML.new(body)
+```

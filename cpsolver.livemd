@@ -1,0 +1,366 @@
+# Fixpoint
+
+```elixir
+Mix.install([
+  :fixpoint,
+  {:kino, "~> 0.10.0"}
+])
+
+Logger.configure(level: :notice)
+
+defmodule RenderHTML do
+  use Kino.JS
+
+  def new(html) when is_binary(html) do
+    Kino.JS.new(__MODULE__, html)
+  end
+
+  asset "main.js" do
+    """
+    export function init(ctx, html) {
+      ctx.root.innerHTML = html;
+    }
+    """
+  end
+
+  ## Sudoku rendering
+  ## Grid is NxN array
+  def render_sudoku(grid) when is_list(hd(grid)) do
+    header = """
+    <div id="sudoku">
+    """
+
+    body = Enum.reduce(grid, "", fn row, acc -> acc <> row_to_string(row) end)
+
+    footer = """
+    </div>
+    """
+
+    ## Render
+    new(header <> body <> footer)
+  end
+
+  def render_sudoku(array1d) do
+    dim = floor(:math.sqrt(length(array1d)))
+
+    Enum.chunk_every(array1d, dim)
+    |> render_sudoku()
+  end
+
+  defp row_to_string(row) do
+    "<div>\n" <> Enum.map_join(row, "\n", fn cell -> sudoku_cell(cell) end) <> "\n</div>"
+  end
+
+  defp sudoku_cell(value) do
+    """
+    <input style="background: white;
+      width: 30px;
+      height: 30px;
+      color: blue;
+      border: 2px solid;
+      font-size: 20px;
+      font-weight: bold;
+      text-align: center;" maxlength="1" size="1" value="#{(value == 0 && "") || value}" disabled="">
+    """
+  end
+
+  ## N-Queens rendering
+  def render_nqueens(solution) do
+    (nqueens_header() <>
+       nqueens_board(solution) <>
+       nqueens_footer())
+    |> new()
+  end
+
+  defp nqueens_header() do
+    """
+    <head>
+        <title></title>
+        <meta charset="UTF-8">
+        <style>
+            .chess-board { border-spacing: 0; border-collapse: collapse; }
+            .chess-board th { padding: .5em; }
+            .chess-board th + th { border-bottom: 1px solid #000; }
+            .chess-board th:first-child,
+            .chess-board td:last-child { border-right: 1px solid #000; }
+            .chess-board tr:last-child td { border-bottom: 1px solid; }
+            .chess-board th:empty { border: none; }
+            .chess-board td { width: 1.5em; height: 1.5em; text-align: center; font-size: 32px; line-height: 0;}
+            .chess-board .light { background: rgb(255, 233, 197); }
+            .chess-board .dark { background: rgb(128, 149, 183); } <!-- 184,139,74 -->
+        </style>
+    </head>
+    <body>
+        <table class="chess-board">
+            <tbody>
+    """
+  end
+
+  defp nqueens_board(solution) do
+    by_rows =
+      Enum.with_index(solution)
+      |> Enum.sort_by(fn {_q, idx} -> idx end)
+      |> Enum.map(fn {q, _idx} -> q end)
+
+    {board_html, _} =
+      Enum.reduce(by_rows, {"", false}, fn q, {board, even} ->
+        {board <> nqueens_board_row(q, length(solution), even), !even}
+      end)
+
+    board_html
+  end
+
+  defp nqueens_board_row(queen_pos, num_rows, even_row?) do
+    white_queen_sym = "♕"
+    black_queen_sym = "♛"
+    light? = !even_row?
+
+    {row_str, _} =
+      Enum.reduce(1..num_rows, {"", light?}, fn p, {cell, l?} ->
+        {cell <>
+           "<td class=#{(l? && "light") || "dark"}>#{(p == queen_pos && ((l? && white_queen_sym) || black_queen_sym)) || ""}</td>",
+         !l?}
+      end)
+
+    "<tr>" <> row_str <> "</tr>"
+  end
+
+  defp nqueens_footer() do
+    """
+          </tbody>
+        </table>
+    </body>
+    """
+  end
+end
+```
+
+## Introduction
+
+***Fixpoint*** is a [Constraint Programming](https://en.wikipedia.org/wiki/Constraint_programming) solver. Constraint programming is widely used for solving hard combinatorial problems, such as planning, scheduling, production and resource optimization, and more.
+
+Constraint programming is [***declarative***](https://en.wikipedia.org/wiki/Declarative_programming#:~:text=Declarative%20programming%20is%20a%20non,by%20a%20declarative%20programming%20style.). That is, instead of coding the solution to the problem, we formulate it as a [**constraint satisfaction problem**](https://en.wikipedia.org/wiki/Constraint_satisfaction_problem), abbreviated as **CSP**. This is done by putting together a set of constraints (usually called a "model") that describes the problem and then feeding it to CP solver. The solver then either produces solutions that satisfy the model (called "feasible solutions"), if any; otherwise, the solver reports the problem unsolvable in terms of the model.
+
+In addition, CSP could be extended to ***constraint optimization problem (COP)***. For the ***COP***, on top of ***CSP*** formulation the model will also specify an optimization objective. The solver will then find the "best" feasible solution with respect to that objective.
+
+To make it more concrete, we will solve some combinatorial problems using ***Fixpoint***.
+
+## N-Queens
+
+**The N-queens problem is about finding how many different ways queens can be placed on a chessboard so that none attack each other.**
+
+<!-- livebook:{"break_markdown":true} -->
+
+[N-Queens code](https://github.com/bokner/fixpoint/blob/main/lib/examples/queens.ex)
+
+#### Let's find one solution to 8-Queens:
+
+```elixir
+alias CPSolver.Examples.Queens
+{:ok, res} = CPSolver.solve_sync(Queens.model(8), stop_on: {:max_solutions, 1})
+IO.inspect(res)
+RenderHTML.render_nqueens(hd(res.solutions))
+```
+
+## Sudoku
+
+https://en.wikipedia.org/wiki/Sudoku
+
+<!-- livebook:{"break_markdown":true} -->
+
+The instance below is taken from http://www.tellmehowto.net/sudoku/veryhardsudoku.html
+
+```elixir
+alias CPSolver.Examples.Sudoku
+hard_puzzle = Sudoku.puzzles().hard9x9
+RenderHTML.render_sudoku(hard_puzzle)
+```
+
+### Let's solve it!
+
+```elixir
+{:ok, res} = CPSolver.solve_sync(Sudoku.model(hard_puzzle))
+RenderHTML.render_sudoku(hd(res.solutions))
+```
+
+[Sudoku code](https://github.com/bokner/fixpoint/blob/main/lib/examples/sudoku.ex)
+
+## Reindeer Ordering
+
+https://dmcommunity.org/challenge/challenge-dec-2017/
+
+**Santa always leaves plans for his elves to determine the order in which the
+  reindeer will pull his sleigh. This year, for the European leg of his
+  journey, his elves are working to the following schedule, which will form a
+  single line of nine reindeer.**
+
+##### Here are the rules:
+
+```
+Comet behind Rudolph, Prancer and Cupid
+Blitzen behind Cupid
+Blitzen in front of Donder, Vixen and Dancer
+Cupid in front of Comet, Blitzen and Vixen
+Donder behind Vixen, Dasher and Prancer
+Rudolph behind Prancer
+Rudolph in front of Donder, Dancer and Dasher
+Vixen in front of Dancer and Comet
+Dancer behind Donder, Rudolph and Blitzen
+Prancer in front of Cupid, Donder and Blitzen
+Dasher behind Prancer
+Dasher in front of Vixen, Dancer and Blitzen
+Donder behind Comet and Cupid
+Cupid in front of Rudolph and Dancer
+Vixen behind Rudolph, Prancer and Dasher.
+```
+
+Try to solve it by hand first!
+
+[Reindeers code](https://github.com/bokner/fixpoint/blob/main/lib/examples/reindeers.ex)
+
+<!-- livebook:{"break_markdown":true} -->
+
+The rules above are encoded as constraints [here](https://github.com/bokner/fixpoint/blob/main/lib/examples/reindeers.ex#L61-L76). The implementation of `behind/2` and `in_front_of/2` uses a universal `Less` constraint.
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+  defp behind(reindeer, list) do
+    Enum.map(list, fn r -> Less.new(reindeer, r) end)
+  end
+
+  defp in_front_of(reindeer, list) do
+    Enum.map(list, fn r -> Less.new(r, reindeer) end)
+  end
+
+```
+
+So the encoding of the rules does not require any programming except wiring rules to the constraint implementations.
+
+<!-- livebook:{"break_markdown":true} -->
+
+#### Let's solve it now:
+
+```elixir
+alias CPSolver.Examples.Reindeers
+Reindeers.solve()
+```
+
+## SEND + MORE = MONEY
+
+This is a classic "cryptarithmetic" problem. Each letter corresponds to a separate digit, we want to find this correspondence, so SEND + MORE = MONEY holds.
+
+#### Solve it!
+
+```elixir
+alias CPSolver.Examples.SendMoreMoney
+
+SendMoreMoney.solve()
+|> Enum.map_join(", ", fn {letter, digit} -> "#{inspect(letter)} = #{digit}" end)
+|> then(fn output -> IO.puts(IO.ANSI.cyan() <> output <> IO.ANSI.reset()) end)
+```
+
+##### Indeed:
+
+```text
+     9 5 6 7
+   + 1 0 8 5
+   _________
+ = 1 0 6 5 2
+```
+
+<!-- livebook:{"break_markdown":true} -->
+
+[SEND+MORE=MONEY code](https://github.com/bokner/fixpoint/blob/main/lib/examples/send_more_money.ex)
+
+## Knapsack
+
+Enough puzzles, we want to do something practical now.
+How about packing a knapsack?
+
+https://rosettacode.org/wiki/Knapsack_problem/0-1
+
+This is a ***constraint optimization problem (COP)***, as opposed to ***constraint satisfaction problems (CSPs)*** we've seen before. That is, we want to satisfy constraints (in this case, the items we choose have to fit into the knapsack), and we also want a total value of items in the knapsack to be maximized (it's our objective).
+
+We will derive a model for this instance from `CPSolver.Examples.Knapsack.model/3`, and then solve it:
+
+```elixir
+alias CPSolver.Examples.Knapsack
+## Instance data (item list)
+items = [
+  # {name, weight, value}
+  {:map, 9, 150},
+  {:compass, 13, 35},
+  {:water, 153, 200},
+  {:sandwich, 50, 160},
+  {:glucose, 15, 60},
+  {:tin, 68, 45},
+  {:banana, 27, 60},
+  {:apple, 39, 40},
+  {:cheese, 23, 30},
+  {:beer, 52, 10},
+  {:suntan_cream, 11, 70},
+  {:camera, 32, 30},
+  {:t_shirt, 24, 15},
+  {:trousers, 48, 10},
+  {:umbrella, 73, 40},
+  {:waterproof_trousers, 42, 70},
+  {:waterproof_overclothes, 43, 75},
+  {:note_case, 22, 80},
+  {:sunglasses, 7, 20},
+  {:towel, 18, 12},
+  {:socks, 4, 50},
+  {:book, 30, 10}
+]
+
+capacity = 400
+###########
+
+#### Build data for the model
+{item_names, weights, values} =
+  List.foldr(items, {[], [], []}, fn {n, w, v}, {n_acc, w_acc, v_acc} = _acc ->
+    {[n | n_acc], [w | w_acc], [v | v_acc]}
+  end)
+
+model = Knapsack.model(values, weights, capacity)
+
+## Solve
+{:ok, res} = CPSolver.solve_sync(model, timeout: 1_000)
+
+## The best (in this case, optimal) solution is the last in the list of feasible solutions
+optimal_solution = List.last(res.solutions)
+
+## Build the output
+## If item variable was resolved to 1, we'll pack it
+## In the meantime, we will compute the total value off the item values.
+## That's for sanity check only, as the solver provides an objective value,
+## which is a total value.
+
+{items_to_pack, total_value, total_weight} =
+  List.foldr(Enum.with_index(item_names), {[], 0, 0}, fn {item, idx},
+                                                         {item_list, total_value, total_weight} ->
+    in_the_list = Enum.at(optimal_solution, idx) == 1
+
+    {
+      (in_the_list && [item | item_list]) || item_list,
+      (in_the_list && total_value + Enum.at(values, idx)) || total_value,
+      (in_the_list && total_weight + Enum.at(weights, idx)) || total_weight
+    }
+  end)
+
+formatted_knapsack =
+  Enum.chunk_every(items_to_pack, 3)
+  |> Enum.map_join("\n", fn row -> Enum.join(row, "....") end)
+
+IO.puts("Items to pack: \n\n#{IO.ANSI.blue()}#{formatted_knapsack}#{IO.ANSI.reset()}\n")
+
+IO.puts(
+  "Total value (calculated from optimal solution): #{IO.ANSI.red()}#{total_value}#{IO.ANSI.reset()}"
+)
+
+IO.puts(
+  "Total value (objective value derived by the solver): #{IO.ANSI.red()}#{res.objective}#{IO.ANSI.reset()}"
+)
+
+IO.puts("Total weight: #{IO.ANSI.red()}#{total_weight}/#{capacity}#{IO.ANSI.reset()}")
+```

@@ -1,0 +1,72 @@
+# Untitled notebook
+
+```elixir
+Mix.install([{:benchee, "~> 1.1"}, {:extrace, "~> 0.5.0"}])
+```
+
+## Section
+
+```elixir
+
+```
+
+```elixir
+defmodule Uniq do
+  @a [
+    %{id: 1},
+    %{location: 2, user: %{id: 1}},
+    %{location: 3, user: %{id: 1}},
+    %{location: 2, user: %{id: 2}},
+    %{location: 3, user: %{id: 3}},
+    %{location: 3, user: %{id: nil}}
+  ]
+  def map_filter_uniq do
+    @a
+    |> Enum.map(&Map.get(&1, :user))
+    |> Enum.map(fn
+      nil -> nil
+      x -> Map.get(x, :id)
+    end)
+    |> Enum.filter(& &1)
+    |> Enum.uniq()
+  end
+
+  def for_uniq do
+    for %{user: %{id: id}} <- @a, is_integer(id), uniq: true, do: id
+  end
+
+  def user(:get, user, next) do
+    Enum.map(user, next)
+  end
+
+  def get_in_filter_uniq do
+    @a
+    |> get_in([&user/3, :user, :id])
+    |> Enum.filter(& &1)
+    |> Enum.uniq()
+  end
+
+  def reduce do
+    Enum.reduce(@a, {[], %{}}, fn
+      %{user: %{id: id}}, {_uniq, set} = acc when is_map_key(set, id) -> acc
+      %{user: %{id: id}}, {uniq, set} when is_integer(id) -> {[id | uniq], Map.put(set, id, true)}
+      _no_user_id_found, acc -> acc
+    end)
+    |> elem(0)
+  end
+end
+```
+
+```elixir
+Benchee.run(%{
+  "for_uniq" => &Uniq.for_uniq/0,
+  "get_in_filter_uniq" => &Uniq.get_in_filter_uniq/0,
+  "map_filter_uniq" => &Uniq.map_filter_uniq/0,
+  "reduce" => &Uniq.reduce/0
+})
+```
+
+```elixir
+Extrace.calls({Uniq, :_, :return_trace}, 100, scope: :local)
+[Uniq.reduce(), Uniq.for_uniq(), Uniq.get_in_filter_uniq(), Uniq.map_filter_uniq()]
+```

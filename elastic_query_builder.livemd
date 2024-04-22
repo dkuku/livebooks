@@ -1,0 +1,230 @@
+# ESQuery
+
+```elixir
+Mix.install([
+  {:snap, "~> 0.9.0"},
+  {:faker, "~> 0.18.0"},
+  {:jason, "~> 1.4"}
+])
+
+ExUnit.configure(exclude: [:skip])
+ExUnit.start(autorun: false)
+```
+
+## Section
+
+```elixir
+defmodule ESQuery do
+  defmodule BoolQuery do
+    defstruct must: [], filter: [], should: [], must_not: []
+  end
+
+  alias ESQuery.BoolQuery
+
+  defmacro __using__(_) do
+    quote do
+      alias ESQuery.BoolQuery
+
+      import ESQuery,
+        only: [
+          boost: 2,
+          minimum_should_match: 2,
+          filter: 2,
+          must: 2,
+          must_not: 2,
+          should: 2,
+          match: 1,
+          term: 1,
+          terms: 2,
+          terms: 3,
+          range: 1,
+          generate: 1,
+          query: 2,
+          match_all: 0
+        ]
+    end
+  end
+
+  def generate(%BoolQuery{} = query, type \\ :bool) do
+    query =
+      query
+      |> Map.from_struct()
+      |> Enum.reject(fn {_k, v} -> v == [] end)
+      |> Enum.map(fn
+        {k, [element]} -> {k, element}
+        elements -> elements
+      end)
+      |> Map.new()
+
+    %{query: %{type => query}}
+    |> Jason.encode!()
+    |> Jason.decode!()
+  end
+
+  def boost(query, val) do
+    Map.put(query, :boost, val)
+  end
+
+  def minimum_should_match(query, val) do
+    Map.put(query, :minimum_should_match, val)
+  end
+
+  def must(%BoolQuery{} = query, val) do
+    %{query | must: query.must ++ [val]}
+  end
+
+  def must_not(%BoolQuery{} = query, val) do
+    %{query | must_not: query.must_not ++ [val]}
+  end
+
+  def should(%BoolQuery{} = query, val) do
+    %{query | should: query.should ++ [val]}
+  end
+
+  def filter(%BoolQuery{} = query, val) do
+    %{query | filter: query.filter ++ [val]}
+  end
+
+  def match([{key, value}]) do
+    %{match: %{key => value}}
+  end
+
+  def term([{key, value}]) do
+    %{term: %{key => value}}
+  end
+
+  def terms([{key, value}]) when is_list(value) do
+    %{terms: %{key => value}}
+  end
+
+  def terms(key, value, opts) when is_list(value) and is_list(opts) do
+    %{terms: %{key => value} |> Map.merge(Map.new(opts))}
+  end
+
+  def range([{key, kw}]) do
+    %{range: %{key => Map.new(kw)}}
+  end
+
+  def match_all() do
+    %{match_all: %{}}
+  end
+
+  def query(val, opts) do
+    opts
+    |> Kernel.++(query: val)
+    |> Map.new()
+  end
+end
+```
+
+```elixir
+ExUnit.start()
+
+defmodule ESQueryTest do
+  use ExUnit.Case, async: true
+
+  use ESQuery
+
+  test "bool filter example" do
+    query =
+      %ESQuery.BoolQuery{}
+      |> must(match(title: "Search"))
+      |> must(match(content: "Elasticsearch"))
+      |> filter(term(status: "published"))
+      |> filter(range(publish_date: [gte: ~D"2015-01-01"]))
+      |> generate()
+
+    assert query ==
+             """
+             {
+               "query": { 
+                 "bool": { 
+                   "must": [
+                     { "match": { "title":   "Search"        }},
+                     { "match": { "content": "Elasticsearch" }}
+                   ],
+                   "filter": [ 
+                     { "term":  { "status": "published" }},
+                     { "range": { "publish_date": { "gte": "2015-01-01" }}}
+                   ]
+                 }
+               }
+             }
+             """
+             |> Jason.decode!()
+  end
+
+  test "bool query full" do
+    query =
+      %ESQuery.BoolQuery{}
+      |> must(term("user.id": "kimchy"))
+      |> must_not(range(age: [gte: 10, lte: 20]))
+      |> filter(term(tags: "production"))
+      |> should(term(tags: "env1"))
+      |> should(term(tags: "deployed"))
+      |> boost(1.0)
+      |> minimum_should_match(1)
+      |> generate()
+
+    assert query ==
+             """
+             {
+             "query": {
+               "bool" : {
+                 "must" : {
+                   "term" : { "user.id" : "kimchy" }
+                 },
+                 "filter": {
+                   "term" : { "tags" : "production" }
+                 },
+                 "must_not" : {
+                   "range" : {
+                     "age" : { "gte" : 10, "lte" : 20 }
+                   }
+                 },
+                 "should" : [
+                   { "term" : { "tags" : "env1" } },
+                   { "term" : { "tags" : "deployed" } }
+                 ],
+                 "minimum_should_match" : 1,
+                 "boost" : 1.0
+               }
+             }
+             }
+             """
+             |> Jason.decode!()
+  end
+
+  test "bool query named" do
+    query =
+      %ESQuery.BoolQuery{}
+      |> filter(terms("name.last", ["banon", "kimchy"], _name: "test"))
+      |> should(match("name.first": query("shay", _name: "first")))
+      |> should(match("name.last": query("banon", _name: "last")))
+      |> generate()
+
+    assert query ==
+             """
+             {
+               "query": {
+                 "bool": {
+                   "should": [
+                     { "match": { "name.first": { "query": "shay", "_name": "first" } } },
+                     { "match": { "name.last": { "query": "banon", "_name": "last" } } }
+                   ],
+                   "filter": {
+                     "terms": {
+                       "name.last": [ "banon", "kimchy" ],
+                       "_name": "test"
+                     }
+                   }
+                 }
+               }
+             }
+             """
+             |> Jason.decode!()
+  end
+end
+
+ExUnit.run()
+```

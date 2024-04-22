@@ -1,0 +1,50 @@
+# Untitled notebook
+
+## Section
+
+```elixir
+defmodule UnicodePlot do
+  @divider "┤"
+  @bar "■"
+  @empty " "
+  def barplot(labels, heights, opts \\ []) do
+    width = opts[:width] || 40
+    max = Enum.max(heights)
+    real_heights = Enum.map(heights, fn x -> round(x / max * width) end)
+    label_width = Enum.map(labels, &String.length/1) |> Enum.max()
+    empty = String.duplicate(@empty, width)
+    start = "┌#{empty}}┐"
+    stop = "└#{empty}┘"
+
+    rows =
+      labels
+      |> Enum.zip(heights)
+      |> Enum.zip(real_heights)
+      |> Enum.map(fn {{label, height}, real_height} ->
+        String.pad_leading(label, label_width) <>
+          @divider <>
+          String.duplicate(@bar, real_height) <>
+          @empty <> to_string(height)
+      end)
+
+    # Enum.flat_map([start, rows, stop], & &1)
+  end
+end
+```
+
+```elixir
+"""
+            ┌                                        ┐ 
+      Paris ┤■■■■■■■■■ 2.244                           
+   New York ┤■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 8.406   
+     Madrid ┤■■■■■■■■■■■■ 3.165                        
+            └                                        ┘ 
+                        population [in mil]            
+"""
+
+UnicodePlot.barplot(
+  ["Paris", "New York", "Madrid"],
+  [2.244, 8.406, 3.165],
+  xlabel: "population [in mil]"
+)
+```

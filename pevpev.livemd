@@ -1,0 +1,115 @@
+# Untitled notebook
+
+```elixir
+# postgrex parses json by default - we want to pass unmodified json to js
+defmodule FakeJason do
+  def decode!(x), do: x
+end
+
+Mix.install(
+  [
+    {:kino_db, "~> 0.2.1"},
+    {:postgrex, "~> 0.16.3"}
+  ],
+  config: [
+    postgrex: [
+      json_library: FakeJason
+    ]
+  ]
+)
+```
+
+## Section
+
+```elixir
+opts = [
+  hostname: "localhost",
+  port: 5432,
+  username: "kuku",
+  password: "",
+  database: "Adventureworks"
+]
+
+{:ok, conn} = Kino.start_child({Postgrex, opts})
+```
+
+```elixir
+defmodule Kino.Pev2 do
+  use Kino.JS
+
+  def new(plan, query) do
+    Kino.JS.new(__MODULE__, %{plan: plan, query: query})
+  end
+
+  asset "main.js" do
+    """
+    export function init(ctx, data) {
+      ctx.importCSS("https://unpkg.com/bootstrap@4.5.0/dist/css/bootstrap.min.css")
+      ctx.importCSS("https://unpkg.com/pev2/dist/style.css")
+      ctx.importCSS("main.css")
+
+      const p1 = ctx.importJS("https://unpkg.com/vue@3.2.37/dist/vue.global.prod.js")
+      const p2 = ctx.importJS("https://unpkg.com/pev2/dist/pev2.umd.js")
+      Promise.all([p1, p2]).then(_ => render(ctx, data))
+    }
+    function render(ctx, data) {
+      const { createApp } = Vue
+
+      const app = createApp({data() {return data}})
+      const html = '<div id="app"><pev2 :plan-source="plan" :plan-query="query" /></div>'
+      ctx.root.innerHTML = html;
+      app.component("pev2", pev2.Plan)
+      app.mount("#app")
+      setTimeout(() => {replaceLinks(ctx)}, 1000)
+
+    }
+    function switchTab(tab) {
+        const activeTabIdx = {'plan': 0, 'raw': 1, 'query': 2, 'stats': 3}[tab];
+        return `(()=>{
+        Array.from(document.querySelectorAll('.nav a')).map(x=>x.classList.remove('active'));
+        Array.from(document.querySelectorAll('.tab-pane')).map(x=>x.classList.remove('show', 'active', 'd-flex'));
+        document.querySelectorAll('.tab-pane')[${activeTabIdx}].classList.add('show', 'active', 'd-flex');
+        document.querySelectorAll('.nav a')[${activeTabIdx}].classList.add('active');
+    })()`
+    }
+    function replaceLinks(ctx) {
+      document.querySelector(".plan-container div:first-child")
+          .innerHTML = '<div class="d-flex align-items-center"><ul class="nav nav-pills"></ul></div>'
+      document.querySelector(".nav")
+          .innerHTML = ["plan", "raw", "query", "stats"]
+          .map(tab => `<li class="nav-item p1"><a class="nav-link px-2 py-0 text-capitalize" onClick="${switchTab(tab)}">${tab}</a></li>`)
+          .join(" ")
+      document.querySelectorAll('.nav a')[0].classList.add('active')
+    }
+    """
+  end
+
+  asset "main.css" do
+    """
+    .plan-container {
+      min-height: 500px;
+    }
+    """
+  end
+end
+```
+
+```elixir
+query = """
+select * from sales.v_store_with_contacts
+"""
+
+explain_template = "EXPLAIN (ANALYZE, COSTS, VERBOSE, BUFFERS, FORMAT JSON) "
+
+conn
+|> Postgrex.query!(explain_template <> query, [])
+|> Map.from_struct()
+|> get_in([:rows, Access.at(0), Access.at(0)])
+|> Kino.Pev2.new(query)
+```
+
+<!-- livebook:{"attrs":{"cache_query":true,"connection":{"type":"postgres","variable":"conn"},"query":"select * from Sales.vStoreWithContacts limit 10","result_variable":"result","timeout":null},"chunks":null,"kind":"Elixir.KinoDB.SQLCell","livebook_object":"smart_cell"} -->
+
+```elixir
+result = Postgrex.query!(conn, "select * from Sales.vStoreWithContacts limit 10", [])
+```

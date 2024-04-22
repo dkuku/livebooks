@@ -1,0 +1,92 @@
+# lm sensors
+
+```elixir
+Mix.install([
+  {:lm_sensors_ex, path: "/home/kuku/Projects/lm_sensors_ex"},
+  :jason,
+  {:mix_install_watcher, "~> 0.1.0"}
+])
+```
+
+## Section
+
+```elixir
+defmodule XXX do
+  def config do
+    [
+      [
+        name: "Battery voltage",
+        value: ["BAT0-acpi-0", "in0", "in0_input"],
+        unit: "V",
+        min_value: 10,
+        max_value: 20
+      ],
+      [
+        name: "CPU Temperature",
+        value: ["acpitz-acpi-0", "temp1", "temp1_input"],
+        unit: "C",
+        min_value: 0,
+        max_value: 120
+      ],
+      [
+        name: "GPU Power usage",
+        value: ["amdgpu-pci-6300", "PPT", "power1_average"],
+        unit: "W",
+        min_value: 0,
+        max_value: 60
+      ],
+      [
+        name: "GPU Temperature",
+        value: ["amdgpu-pci-6300", "edge", "temp1_input"],
+        unit: "C",
+        min_value: 0,
+        max_value: 120
+      ],
+      [
+        name: "GPU Voltage",
+        value: ["amdgpu-pci-6300", "vddgfx", "in0_input"],
+        unit: "V",
+        min_value: 0,
+        max_value: 2
+      ],
+      [
+        name: "NB Voltage",
+        value: ["amdgpu-pci-6300", "vddnb", "in1_input"],
+        unit: "V",
+        min_value: 0,
+        max_value: 2
+      ],
+      [
+        name: "CPU Fan Temperature",
+        value: ["k10temp-pci-00c3", "Tctl", "temp1_input"],
+        unit: "C",
+        min_value: 0,
+        max_value: 80
+      ],
+      [
+        name: "WiFi Temperature",
+        value: ["mt7921_phy0-pci-0100", "temp1", "temp1_input"],
+        unit: "C",
+        min_value: 0,
+        max_value: 60
+      ],
+      [
+        name: "NVME Temperature",
+        value: ["nvme-pci-0300", "Composite", "temp1_input"],
+        unit: "C",
+        min_value: 0,
+        max_value: 70
+      ]
+    ]
+  end
+end
+
+sensors = LmSensorsEx.get_data()
+
+XXX.config()
+|> Enum.map(fn config ->
+  config
+  |> Map.new()
+  |> Map.update!(:value, &get_in(sensors, &1))
+end)
+```

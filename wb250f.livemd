@@ -1,0 +1,186 @@
+# WB250F remote access
+
+```elixir
+Mix.install([
+  {:req, "~> 0.4.5"},
+  {:xml_json, "~> 0.4.2"},
+  {:kino, "~> 0.11.3"}
+])
+```
+
+## Main setup
+
+All data is from [here](https://github.com/ge0rg/samsung-nx-hacks):
+
+```elixir
+defmodule WB250F.Request do
+  @set_template """
+  <?xml version="1.0" encoding="utf-8"?>
+  <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+     <s:Body>
+        <u:<%= command %> xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">
+            <<%= param %>>
+                <%= value %>
+            </<%= param %>>
+        </u:<%= command %>>
+     </s:Body>
+  </s:Envelope>
+  """
+  require EEx
+  EEx.function_from_string(:def, :body, @set_template, [:command, :param, :value])
+end
+
+defmodule WB250F do
+  @base_url "http://192.168.102.1:7676"
+  @mac "14:AC:60:B4:43:83"
+
+  def settings do
+    %{
+      get: "/smp_3_",
+      set: "/smp_4_",
+      key: "ContentDirectory"
+    }
+  end
+
+  def settings2 do
+    %{
+      get: "/smp_6_",
+      set: "/smp_7_",
+      key: "ConnectionManager"
+    }
+  end
+
+  def execute(command, settings \\ nil, bindings \\ []) do
+    settings = if settings, do: settings, else: settings()
+
+    body =
+      if bindings == [],
+        do: "",
+        else: WB250F.Request.body(command, bindings[:param], bindings[:value])
+
+    headers = [{"SOAPACTION", ~s("urn:schemas-upnp-org:service:#{settings[:key]}:1##{command}")}]
+
+    generate_url(settings[:set])
+    |> Req.post!(headers: headers, body: body)
+    |> Map.get(:body)
+    |> XmlJson.Parker.deserialize!()
+  end
+
+  def generate_url(path) do
+    @base_url <> path
+  end
+
+  def auth_headers(mac \\ @mac) do
+    [{"User-Agent", "SEC_RVF_ML_#{mac}"}]
+  end
+
+  def get(headers, url) do
+    case Req.get(url, headers: headers) do
+      {:ok, %{body: body}} -> XmlJson.Parker.deserialize!(body)
+      {:error, error} -> IO.inspect(error)
+    end
+  end
+
+  def print_action_list(res) do
+    res
+    |> Map.get("actionList")
+    |> Enum.map_join("\n", fn action ->
+      [
+        action["name"],
+        "\n",
+        Enum.map_join(action["argumentList"], "\n", fn argument ->
+          [
+            if argument["direction"] == "out" do
+              "  <<   "
+            else
+              "    >> "
+            end,
+            argument["name"],
+            ": ",
+            argument["relatedStateVariable"]
+          ]
+        end)
+      ]
+    end)
+  end
+end
+```
+
+This gets the data about high level settings
+
+```elixir
+WB250F.auth_headers()
+|> WB250F.get(WB250F.generate_url("/smp_2_"))
+```
+
+Thats the acual params that are available to set and execute
+
+```elixir
+WB250F.auth_headers()
+|> WB250F.get(WB250F.generate_url(WB250F.settings()[:get]))
+|> WB250F.print_action_list()
+|> IO.puts()
+```
+
+similar but from a different endpoint it's more about connections
+
+```elixir
+WB250F.auth_headers()
+|> WB250F.get(WB250F.generate_url(WB250F.settings2()[:get]))
+|> WB250F.print_action_list()
+|> IO.puts()
+```
+
+## Execue commands
+
+second param is the `WB250F.settings()` `/smp_3_` default under `nil` or `WB250F.settings2()` `/smp_6_`
+
+```elixir
+WB250F.execute("GetInfomation", nil)
+```
+
+```elixir
+url = "http://192.168.102.1:7679/livestream.avi"
+# Kino.Docs.HTML.new(url, :avi)
+# create a Kino that displays a video stream
+```
+
+This is how you set params
+
+```elixir
+# WB250F.execute("SetLED", nil, param: "LEDTIME", value: "1")
+```
+
+Make a picture
+
+```elixir
+WB250F.execute("MULTIAF")
+|> IO.inspect()
+
+case WB250F.execute("Shot") do
+  [%{"AFSHOTRESULT" => url}] = success_result ->
+    IO.inspect(success_result)
+
+    {:ok, %Req.Response{status: 200, headers: %{"content-type" => [content_type]}, body: image}} =
+      Req.get(url)
+
+    Kino.Image.new(image, content_type)
+
+  error ->
+    IO.inspect(error)
+end
+```
+
+## Get capabilities = does not work on wb250f
+
+```elixir
+base_url = "http://192.168.102.1:7676"
+mac = "14:AC:60:B4:43:83"
+discovery_url = "/mode/control"
+
+headers = [
+  {"User-Agent", "SEC_MODE_#{mac}"}
+]
+
+Req.get(base_url <> discovery_url)
+```

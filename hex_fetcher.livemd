@@ -1,0 +1,16 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:req, "~> 0.3.11"},
+  {:jason, "~> 1.4"}
+])
+```
+
+## Section
+
+```elixir
+"https://hex.pm/api/packages?sort=updated_at&page=1"
+|> Req.get!()
+|> Map.get(:body)
+```

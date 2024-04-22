@@ -1,0 +1,168 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:yeelight, path: "/home/kuku/Projects/yeelight-ex"}
+])
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+==> yeelight
+Compiling 3 files (.ex)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+## Section
+
+```elixir
+# start the discovery server
+Yeelight.Discover.start()
+:timer.sleep(1000)
+
+# Get the device list
+devices = Yeelight.Discover.devices()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  %Yeelight.Device{
+    host: "192.168.1.200",
+    port: 55443,
+    id: "0x00000000034734e8",
+    model: "mono",
+    fw_ver: "55",
+    support: ["get_prop", "set_default", "set_power", "toggle", "set_bright", "start_cf", "stop_cf",
+     "set_scene", "cron_add", "cron_get", "cron_del", "set_adjust", "set_name"],
+    power: "off",
+    bright: 100,
+    color_mode: 2,
+    ct: 4000,
+    rgb: 0,
+    hue: 0,
+    sat: 0,
+    name: "",
+    command_id: 0
+  },
+  %Yeelight.Device{
+    host: "192.168.1.225",
+    port: 55443,
+    id: "0x0000000003473060",
+    model: "mono",
+    fw_ver: "56",
+    support: ["get_prop", "set_default", "set_power", "toggle", "set_bright", "start_cf", "stop_cf",
+     "set_scene", "cron_add", "cron_get", "cron_del", "set_adjust", "set_name"],
+    power: "off",
+    bright: 100,
+    color_mode: 2,
+    ct: 4000,
+    rgb: 0,
+    hue: 0,
+    sat: 0,
+    name: "",
+    command_id: 0
+  }
+]
+```
+
+```elixir
+Enum.map(devices, fn device -> device end)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  %Yeelight.Device{
+    host: "192.168.1.200",
+    port: 55443,
+    id: "0x00000000034734e8",
+    model: "mono",
+    fw_ver: "55",
+    support: ["get_prop", "set_default", "set_power", "toggle", "set_bright", "start_cf", "stop_cf",
+     "set_scene", "cron_add", "cron_get", "cron_del", "set_adjust", "set_name"],
+    power: "off",
+    bright: 100,
+    color_mode: 2,
+    ct: 4000,
+    rgb: 0,
+    hue: 0,
+    sat: 0,
+    name: "",
+    command_id: 0
+  },
+  %Yeelight.Device{
+    host: "192.168.1.225",
+    port: 55443,
+    id: "0x0000000003473060",
+    model: "mono",
+    fw_ver: "56",
+    support: ["get_prop", "set_default", "set_power", "toggle", "set_bright", "start_cf", "stop_cf",
+     "set_scene", "cron_add", "cron_get", "cron_del", "set_adjust", "set_name"],
+    power: "off",
+    bright: 100,
+    color_mode: 2,
+    ct: 4000,
+    rgb: 0,
+    hue: 0,
+    sat: 0,
+    name: "",
+    command_id: 0
+  }
+]
+```
+
+```elixir
+color_flow = [
+  %Yeelight.FlowExpression.RGB{
+    duration: 1000,
+    r: 255,
+    brightness: 100
+  },
+  %Yeelight.FlowExpression.RGB{
+    duration: 1000,
+    g: 255,
+    brightness: 100
+  },
+  %Yeelight.FlowExpression.RGB{
+    duration: 1000,
+    b: 255,
+    brightness: 100
+  },
+  %Yeelight.FlowExpression.ColorTemperature{
+    duration: 1000,
+    temperature: 6500,
+    brightness: 100
+  },
+  %Yeelight.FlowExpression.ColorTemperature{
+    duration: 1000,
+    temperature: 1800,
+    brightness: 100
+  }
+]
+
+Yeelight.Command.start_color_flow(6, 0, color_flow)
+|> Yeelight.Command.send_to(hd(devices))
+```
+
+```elixir
+Enum.map(devices, fn device ->
+  Yeelight.Command.set_scene_auto_delay_off(1, 5) |> Yeelight.Command.send_to(device)
+end)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[ok: 0, ok: 0]
+```

@@ -1,0 +1,173 @@
+<!-- livebook:{"app_settings":{"slug":"kuku"}} -->
+
+# Recurrent Neural Network
+
+```elixir
+Mix.install([:req, :nx, :axon, :exla, :kino, :table_rex])
+Nx.Defn.default_options(compiler: EXLA)
+Nx.global_default_backend(EXLA.Backend)
+```
+
+## # Load Dataset
+
+```elixir
+url =
+  "https://raw.githubusercontent.com/aamini/introtodeeplearning/master/mitdeeplearning/data/irish.abc"
+
+dataset =
+  url
+  |> Req.get()
+  |> elem(1)
+  |> Map.get(:body)
+
+example =
+  dataset
+  |> String.split("\n\n", parts: 2)
+  |> hd()
+
+IO.puts(example)
+```
+
+```elixir
+play = fn content ->
+  filename = "song_#{:erlang.unique_integer([:positive])}.abc"
+  path = Path.join(["/tmp", filename])
+  File.write(path, content)
+  System.cmd("abc2midi", [path, "-o", path <> ".mid"])
+  System.cmd("timidity", [path <> ".mid", "&"])
+  File.rm(path)
+  File.rm(path <> ".mid")
+end
+
+# play.(example)
+```
+
+## Prepare data
+
+To convert between string data and it's numeric representation we can just get the ascii code of any given character.
+
+```elixir
+processed_dataset = dataset |> String.to_charlist()
+# Extract all then unique characters we have and sort them for clarity
+
+characters = processed_dataset |> Enum.uniq() |> Enum.sort()
+characters_count = Enum.count(characters)
+
+# Create a mapping for every character
+char_to_idx = characters |> Enum.with_index() |> Map.new()
+# And a reverse mapping to convert back to characters
+idx_to_char = characters |> Enum.with_index(&{&2, &1}) |> Map.new()
+
+IO.puts("Total book characters: #{Enum.count(processed_dataset)}")
+IO.puts("Total unique characters: #{characters_count}")
+```
+
+```elixir
+train_data = fn processed_dataset, char_to_idx, sequence_length, characters_count ->
+  processed_dataset
+  |> Enum.map(&char_to_idx[&1])
+  |> Enum.chunk_every(sequence_length, 1, :discard)
+  |> Enum.drop(-1)
+  |> Nx.tensor()
+  |> Nx.divide(characters_count)
+  |> Nx.reshape({:auto, sequence_length, 1})
+end
+```
+
+## get_batch
+
+Batch is a list of tuples with input and output
+
+```elixir
+train_results = fn processed_dataset, char_to_idx, sequence_length, characters_count ->
+  processed_dataset
+  |> Enum.map(&char_to_idx[&1])
+  |> Enum.chunk_every(sequence_length, 1, :discard)
+  |> Enum.drop(1)
+  |> Nx.tensor()
+  |> Nx.reshape({:auto, 1})
+  |> Nx.equal(Nx.iota({1, characters_count}))
+end
+```
+
+### Build the model
+
+```elixir
+### Hyperparameter setting and optimization ###
+
+# Optimization parameters:
+# Increase this to train longer
+num_training_iterations = 2000
+# Experiment between 1 and 64
+batch_size = 4
+# Experiment between 50 and 500
+sequence_length = 100
+# Experiment between 1e-5 and 1e-1
+learning_rate = 0.005
+
+# Model parameters: 
+embedding_dim = 256
+# Experiment between 1 and 2048
+rnn_units = 1024
+```
+
+```elixir
+build_model = fn vocab_size, embedding_dim, rnn_units, batch_size ->
+  "input"
+  |> Axon.input(shape: {nil, sequence_length, 1})
+  |> Axon.lstm(embedding_dim)
+  |> elem(0)
+  |> Axon.nx(fn t -> t[[0..-1//1, -1]] end)
+  # |> Axon.dropout(rate: 0.2)
+  |> Axon.dense(vocab_size, activation: :softmax)
+end
+```
+
+```elixir
+train_data = train_data.(processed_dataset, char_to_idx, sequence_length, characters_count)
+train_results = train_results.(processed_dataset, char_to_idx, sequence_length, characters_count)
+model = build_model.(characters_count, embedding_dim, rnn_units, batch_size)
+
+train_batches = Nx.to_batched(train_data, batch_size, leftover: :discard)
+result_batches = Nx.to_batched(train_results, batch_size, leftover: :discard)
+
+IO.puts("Total batches: #{Enum.count(train_batches)}")
+
+params =
+  model
+  |> Axon.Loop.trainer(:categorical_cross_entropy, Axon.Optimizers.adam(0.001))
+  |> Axon.Loop.run(Stream.zip(train_batches, result_batches), %{}, epochs: 20, compiler: EXLA)
+```
+
+```elixir
+generate_fn = fn model, params, init_seq ->
+  # The initial sequence that we want the network to complete for us.
+  init_seq =
+    init_seq
+    |> String.to_charlist()
+    |> Enum.map(&char_to_idx[&1])
+
+  Enum.reduce(1..100, init_seq, fn _, seq ->
+    current_init_seq =
+      seq
+      |> Enum.take(-sequence_length)
+      |> Nx.tensor()
+      |> Nx.divide(characters_count)
+      |> Nx.reshape({1, sequence_length, 1})
+
+    char =
+      Axon.predict(model, params, current_init_seq)
+      |> Nx.argmax()
+      |> Nx.to_number()
+
+    seq ++ [char]
+  end)
+  |> Enum.map(&idx_to_char[&1])
+end
+
+prediction_batch_size
+mprediction_odel = build_model.(characters_count, embedding_dim, rnn_units, prediction_batch_size)
+
+generate_fn.(prediction_model, params, "X")
+|> IO.puts()
+```

@@ -1,0 +1,66 @@
+<!-- livebook:{"file_entries":[{"name":"noahs_market_csv.zip","type":"attachment"}]} -->
+
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:kino_explorer, "~> 0.1.11"},
+  {:unzip, "~> 0.9.0"}
+])
+```
+
+## Section
+
+```elixir
+require Explorer.DataFrame, as: DF
+
+[customers, orders, orders_items, products] =
+  for type <- [:customers, :orders, :orders_items, :products] do
+    "/home/kuku/5784/noahs-#{type}.csv"
+    |> DF.from_csv!()
+  end
+```
+
+```elixir
+co =
+  products
+  |> DF.filter(contains(desc, "Rug Cleaner"))
+  |> DF.join(orders_items)
+  |> DF.join(orders)
+  |> DF.filter(contains(ordered, "2017"))
+  |> DF.join(customers)
+  |> DF.filter(contains(name, "J") and contains(name, "P"))
+  |> then(& &1[:phone])
+  |> Explorer.Series.first()
+```
+
+```elixir
+cancer_start = "06-21"
+cancer_end = "06-23"
+# we need only the  year from third column
+rabbit =
+  """
+  29 January 1903 	15 February 1904 	Water Hare
+  14 February 1915 	3 February 1916 	Wood Hare
+  2 February 1927 	22 January 1928 	Fire Hare
+  19 February 1939 	7 February 1940 	Earth Hare
+  6 February 1951 	26 January 1952 	Metal Hare
+  25 January 1963 	12 February 1964 	Water Hare
+  11 February 1975 	30 January 1976 	Wood Hare
+  29 January 1987 	16 February 1988 	Fire Hare
+  16 February 1999 	4 February 2000 	Earth Hare
+  3 February 2011 	22 January 2012 	Metal Hare
+  22 January 2023 	9 February 2024 	Water Hare 
+  """
+  |> String.split("\n", trim: true)
+  |> Enum.map(fn line ->
+    line
+    |> String.split(" ", trim: true)
+    |> Enum.at(2)
+  end)
+  |> Enum.map(fn year ->
+    "#{year}-#{cancer_start},#{year}-#{cancer_end}"
+  end)
+  |> Enum.join("\n")
+  |> DF.load_csv!()
+```

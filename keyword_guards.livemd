@@ -1,0 +1,236 @@
+# Abusing defguard for keyword lists
+
+```elixir
+Mix.install([
+  {:benchee, "~> 1.3"}
+])
+```
+
+## Section
+
+In elixir you can pattern match on map key values pairs:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def match_map(%{key1: true}) do
+  do_something()
+end
+
+def match_map(_) do
+  do_something_else()
+end
+
+match_map(%{key1: true, key2: false})
+```
+
+It would be great if similar thing could be made using keyword lists. Currently you can match on keyword lists but the order of parameters has to be taken into consideration. When it changes your pattern match will fail.
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def match_keyword([key1: true, _]) do
+  do_something()
+end
+
+def match_keyword(_) do
+  do_something_else()
+end
+
+match_keyword([key1: true, key2: false])
+match_keyword([key2: false, key1: true])
+```
+
+The first function call will succeed but the second won't be matched.
+For maps we can use also the dot syntax:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def match_map(opts) when opts.key1 == true do
+  do_something()
+end
+```
+
+Is there a way to do something similar for keywords? Looking at the [documetation](https://hexdocs.pm/elixir/main/patterns-and-guards.html#guards) you can see this line `in and not in operators (as long as the right-hand side is a list or a range)`. This looks promising because a keyword list is a list of tuples in the form of `{key, value}` it should be possible to do this:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def match_keyword(keyword) when {:key1, true} in keyword do
+  do_something()
+end
+```
+
+But after trying to compile this code we get an error:
+
+```
+** (ArgumentError) invalid right argument for operator "in", it expects a compile-time proper list or compile-time range on the right side when used in guard expressions, got: keywords
+```
+
+The only way to get have this working is having the list on compile time already defined.
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def match_keyword(keyword) when {:key1, true} in [key1: true, key2: false] do
+  do_something()
+end
+```
+
+Looking at other possible guards there is this line `functions that work on built-in datatypes (abs/1, hd/1, map_size/1, and others)`. When there is hd is there also a tl available ?? It turns out there is. Having a short list of options in your keyword list you can get around the missing guard by defining a new guard in this way:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+  defguard keyword_match(keywords, key, val)
+           when is_list(keywords) and
+                  is_atom(key) and
+                  (hd(keywords) == {key, val} or
+                     hd(tl(keywords)) == {key, val})
+```
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def match_keyword(keyword) when keyword_match(keyword, :key1, true} do
+  do_something()
+end
+```
+
+It will check both positions. When you have more params you can just extend the check:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+                  (hd(keywords) == {key, val} or
+                     hd(tl(keywords)) == {key, val} or
+                     hd(tl(tl(keywords))) == {key, val} or
+                     hd(tl(tl(tl(keywords)))) == {key, val})
+```
+
+Below you can find a benchmark that you can run yourself, This are my results:
+
+```
+Comparison: 
+map_pattern        37.45 M
+map_guard          37.38 M - 1.00x slower +0.0455 ns
+length_guard       27.88 M - 1.34x slower +9.16 ns
+length             27.88 M - 1.34x slower +9.17 ns
+guard4             25.73 M - 1.46x slower +12.16 ns
+keyword            25.44 M - 1.47x slower +12.61 ns
+guard8             18.42 M - 2.03x slower +27.60 ns
+```
+
+It shows that matching on maps is the fastest one. The proposed guard is around 2x slower depending on the amount of options you wan't to check. It is still comparable with `Keyword.get` so if you're using keyword get inside your function you may consider to switch to the proposed guard and remove some nesting. I also included the length function and guard for comparison. This is the only guard that traverses the whole list and can be slow or misused:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def function(x) when length(x) > 0, do: traverse(x)
+def function(x) when length(x) == 2, do: traverse(x)
+```
+
+this can be slow when your list is big - instead you should match on exact list size when possible:
+
+<!-- livebook:{"force_markdown":true} -->
+
+```elixir
+def function(x) when x != [], do: traverse(x)
+def function([_, _]), do: traverse(x)
+```
+
+```elixir
+defmodule TTT do
+  defguard keyword_val_eq4(keywords, key, val)
+           when is_list(keywords) and
+                  is_atom(key) and
+                  (hd(keywords) == {key, val} or
+                     hd(tl(keywords)) == {key, val} or
+                     hd(tl(tl(keywords))) == {key, val} or
+                     hd(tl(tl(tl(keywords)))) == {key, val})
+
+  defguard keyword_val_eq8(keywords, key, val)
+           when is_list(keywords) and
+                  is_atom(key) and
+                  (hd(keywords) == {key, val} or
+                     hd(tl(keywords)) == {key, val} or
+                     hd(tl(tl(keywords))) == {key, val} or
+                     hd(tl(tl(tl(keywords)))) == {key, val} or
+                     hd(tl(tl(tl(tl(keywords))))) == {key, val} or
+                     hd(tl(tl(tl(tl(tl(keywords)))))) == {key, val} or
+                     hd(tl(tl(tl(tl(tl(tl(keywords))))))) == {key, val} or
+                     hd(tl(tl(tl(tl(tl(tl(tl(keywords)))))))) == {key, val})
+
+  defguard keyword_val_eq(keywords, key, val)
+           when is_list(keywords) and
+                  is_atom(key) and
+                  :lists.keyfind(key, 1, keywords) == val
+
+  def len(x), do: length(x) > 0
+  def length_guard(x) when length(x) > 0, do: true
+  def keyword(x), do: Keyword.get(x, :a_4)
+  def guard_in(x) when keyword_val_eq(x, :a_4, true), do: true
+  def guard_in(_x), do: false
+  def guard4(x) when keyword_val_eq4(x, :a_4, true), do: true
+  def guard4(_x), do: false
+  def guard8(x) when keyword_val_eq8(x, :a_4, true), do: true
+  def guard8(_x), do: false
+  def map_pattern(%{a_4: true}), do: true
+  def map_pattern(_x), do: false
+  def map_guard(map) when map.a_4 == true, do: true
+  def map_guard(_x), do: false
+end
+
+defmodule BNCE do
+  @list Enum.map(1..16, &{String.to_atom("a_#{&1}"), &1})
+  @map Map.new(@list)
+
+  def length do
+    TTT.len(@list)
+  end
+
+  def length_guard do
+    TTT.length_guard(@list)
+  end
+
+  def keyword do
+    TTT.keyword(@list)
+  end
+
+  def guard_in do
+    TTT.guard_in(@list)
+  end
+
+  def guard4 do
+    TTT.guard4(@list)
+  end
+
+  def guard8 do
+    TTT.guard8(@list)
+  end
+
+  def map_pattern do
+    TTT.map_pattern(@map)
+  end
+
+  def map_guard do
+    TTT.map_guard(@map)
+  end
+end
+
+Benchee.run(
+  %{
+    "length" => &BNCE.length/0,
+    "length_guard" => &BNCE.length_guard/0,
+    "keyword" => &BNCE.keyword/0,
+    "guard_in" => &BNCE.guard_in/0,
+    "guard4" => &BNCE.guard4/0,
+    "guard8" => &BNCE.guard8/0,
+    "map_guard" => &BNCE.map_guard/0,
+    "map_pattern" => &BNCE.map_pattern/0
+  },
+  time: 1,
+  memory_time: 0
+)
+```

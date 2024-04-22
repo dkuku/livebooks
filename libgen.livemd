@@ -1,0 +1,52 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:req, "~> 0.4.5"}
+])
+```
+
+## Section
+
+```elixir
+defmodule LibGen do
+  @mirror "libgen.is"
+
+  def search(query, res, column) do
+    if String.length(query) < 4 do
+      raise "query must be at least four characters long!"
+    end
+
+    if res != 25 && res != 50 && res != 100 do
+      raise "res must equal either 25, 50 or 100"
+    end
+
+    page = 0
+
+    query = [
+      req: query,
+      lg_topic: "libgen",
+      open: 0,
+      view: "detailed",
+      res: res,
+      column: column,
+      page: page
+    ]
+
+    url =
+      "http://#{@mirror}/search.php"
+      |> URI.new!()
+      |> URI.append_query(URI.encode_query(query))
+
+    response = Req.get!(url).body
+    IO.inspect(response)
+  end
+end
+
+LibGen.search("postg", 25, 0)
+```
+
+```elixir
+
+<iframe src="http://localhost:9090/sessions/xkwflzq3k67dtwvlvcvj7baffvlhw2rlu2gfgedvg4qdizwbxkwflzq3k67dtwvlvcvj7baffvlhw2rlu2gfgedvg4qdizwbxkwflzq3k67dtwvlvcvj7baffvlhw2rlu2gfgedvg4qdizwb" title="W3Schools Free Online Web Tutorials"></iframe>
+```

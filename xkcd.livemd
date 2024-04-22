@@ -1,0 +1,56 @@
+# Untitled notebook
+
+```elixir
+Mix.install([:kino, :jason])
+```
+
+## Section
+
+```elixir
+defmodule Kino.XKCD do
+  use Kino.JS
+
+  def new(data) do
+    Kino.JS.new(__MODULE__, data)
+  end
+
+  asset "main.js" do
+    """
+     export function init(ctx, data) {
+      ctx.importJS("https://cdn.jsdelivr.net/npm/chart.xkcd@1/dist/chart.xkcd.min.js")
+      .then(()=>{
+        ctx.root.innerHTML = '<div style="width:800px;height:600px;"><svg id="line-chart"></svg></div>'
+        let svg = document.getElementById('line-chart');
+        new chartXkcd.Line(svg, JSON.parse(data));      
+      })
+    }
+    """
+  end
+
+  asset "main.css" do
+    """
+    #root {
+      width: 800px;
+      height: 600px;
+    }
+    """
+  end
+end
+```
+
+```elixir
+%{
+  "data" => %{
+    "datasets" => [
+      %{"data" => [30, 70, 200, 300, 500, 800, 1500, 2900, 5000, 8000], "label" => "Plan"},
+      %{"data" => [0, 1, 30, 70, 80, 100, 50, 80, 40, 150], "label" => "Reality"}
+    ],
+    "labels" => ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]
+  },
+  "title" => "Monthly income of an indie developer",
+  "xLabel" => "Month",
+  "yLabel" => "$ Dollars"
+}
+|> Jason.encode!()
+|> Kino.XKCD.new()
+```

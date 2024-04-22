@@ -1,0 +1,68 @@
+# Untitled notebook
+
+```elixir
+Mix.install(
+  [
+    {:kino_bumblebee, "~> 0.3.0"},
+    {:exla, "~> 0.5.1"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Section
+
+```elixir
+{:ok, model_info} = Bumblebee.load_model({:hf, "grammarly/coedit-large"})
+{:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "google/flan-t5-large"})
+{:ok, generation_config} = Bumblebee.load_generation_config({:hf, "grammarly/coedit-large"})
+
+generation_config = Bumblebee.configure(generation_config, max_new_tokens: 100)
+
+serving =
+  Bumblebee.Text.generation(model_info, tokenizer, generation_config,
+    compile: [batch_size: 1, sequence_length: 100],
+    defn_options: [compiler: EXLA]
+  )
+```
+
+```elixir
+text =
+  "write this in 2 different versions: When I grow up, I start to understand what he said is quite right"
+
+%{results: [%{text: generated_text}]} = Nx.Serving.run(serving, text)
+```
+
+```elixir
+String.jaro_distance(text, generated_text) |> IO.puts()
+
+diff =
+  ExUnit.Diff.compute(text, generated_text, :==)
+
+colorize_diff = fn {diff, _} ->
+  [:left, :right]
+  |> Enum.map(fn side ->
+    diff
+    |> get_in([Access.key(side), :contents])
+    |> Enum.map_join(fn
+      {false, str} -> str
+      {true, str} -> String.upcase(str)
+    end)
+  end)
+end
+
+colorize_diff.(diff)
+```
+
+```elixir
+text = "Write this text more formally: Yo man, how is it going. I'm high"
+%{results: [%{text: generated_text}]} = Nx.Serving.run(serving, text)
+generated_text
+```
+
+```elixir
+text =
+  "Fix grammatical errors in this sentence: When I grow up, I start to understand what he said is quite right."
+
+%{results: [%{text: generated_text}]} = Nx.Serving.run(serving, text)
+```

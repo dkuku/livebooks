@@ -1,0 +1,53 @@
+<!-- livebook:{"autosave_interval_s":null} -->
+
+# Untitled notebook
+
+```elixir
+Mix.install([
+  :jason,
+  {:kino, "~> 0.9.3"}
+])
+```
+
+## Section
+
+```elixir
+defmodule KinoDocs.Blocky do
+  use Kino.JS
+
+  def new(toolbox) do
+    Kino.JS.new(__MODULE__, toolbox)
+  end
+
+  asset "main.js" do
+    """
+    const blockyRoot = '<div id="blocklyDiv" style="height: 480px; width: 600px;"></div>'
+    //const toolbox = {"kind":"flyoutToolbox","contents":[{"kind":"block","type":"math_number"},{"kind":"block","type":"text"},{"kind":"block","type":"text_print"}]}11
+
+    export function init(ctx, toolbox) {
+    ctx.importJS("https://unpkg.com/blockly/blockly.min.js").then(
+     () => {load(ctx, toolbox)}
+    )
+    }
+    const load = (ctx, toolbox) => {
+       ctx.root.innerHTML = blockyRoot;
+       const workspace = Blockly.inject('blocklyDiv', {toolbox: JSON.parse(toolbox)});
+
+    }
+    """
+  end
+end
+
+toolbox =
+  %{
+    contents: [
+      %{kind: "block", type: "math_number"},
+      %{kind: "block", type: "text"},
+      %{kind: "block", type: "text_print"}
+    ],
+    kind: "flyoutToolbox"
+  }
+  |> Jason.encode!()
+
+KinoDocs.Blocky.new(toolbox)
+```

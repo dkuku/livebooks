@@ -1,0 +1,166 @@
+# attachment params validation
+
+## Section
+
+```elixir
+Mix.install([{:ecto, "~> 3.0"}])
+```
+
+```elixir
+doc = %{
+  "data" => %{
+    "attributes" => %{
+      "filename" => "file_name.Jpg",
+      "filesize" => 500_000,
+      "customer-id" => 1
+    },
+    "type" => "note-attachment",
+    "relationships" => %{}
+  }
+}
+```
+
+```elixir
+defmodule AttachmentParams do
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @allowed_extensions ~w(jpg jpeg png)
+  embedded_schema do
+    field(:file_size, :integer)
+    field(:customer_id, :integer)
+    field(:file_type, :string)
+    field(:file_name, :string)
+    field(:filename, :string, virtual: true)
+    field(:filesize, :integer, virtual: true)
+    field(:"customer-id", :integer, virtual: true)
+  end
+
+  def changeset(attachment, params \\ %{}) do
+    attachment
+    |> cast(params, [:filename, :filesize, :"customer-id"])
+    |> validate_required([:filename, :filesize, :"customer-id"])
+    |> validate_number(:filesize, less_than: 10_000_000)
+    |> validate_format(:filename, ~r/\./, message: "file name needs to have extension")
+    |> put_required_fields()
+    |> delete_virtual_fields([:filename, :filesize, :"customer-id"])
+    |> validate_length(:file_type, min: 2, max: 5)
+    |> validate_length(:file_name, min: 2, max: 100)
+    |> validate_inclusion(:file_type, @allowed_extensions, message: "file extension not supported")
+  end
+
+  defp put_required_fields(
+         %Ecto.Changeset{
+           changes: %{
+             "customer-id": customer_id,
+             filename: full_file_name,
+             filesize: file_size
+           }
+         } = changeset
+       ) do
+    {file_name, file_type} = split_filename(full_file_name)
+
+    changeset
+    |> put_change(:file_name, file_name)
+    |> put_change(:file_type, file_type)
+    |> put_change(:file_size, file_size)
+    |> put_change(:customer_id, customer_id)
+  end
+
+  defp delete_virtual_fields(changeset, virtual_fields) do
+    Enum.reduce(virtual_fields, changeset, &delete_change(&2, &1))
+  end
+
+  defp split_filename(full_file_name) do
+    unstandarized_file_type = Path.extname(full_file_name)
+    file_name = Path.basename(full_file_name, unstandarized_file_type)
+    file_type = standarize_extension(unstandarized_file_type)
+    {file_name, file_type}
+  end
+
+  defp standarize_extension(ext) do
+    ext
+    |> strip_dot_from_extension()
+    |> String.downcase()
+  end
+
+  defp strip_dot_from_extension("." <> ext), do: ext
+  defp strip_dot_from_extension(ext), do: ext
+end
+```
+
+```elixir
+AttachmentParams.changeset(%AttachmentParams{}, doc["data"]["attributes"])
+```
+
+```elixir
+defmodule AttachmentParamsSchemaless do
+  import Ecto.Changeset
+
+  @allowed_extensions ~w(jpg jpeg png)
+  @types %{
+    :"customer-id" => :integer,
+    file_size: :integer,
+    customer_id: :integer,
+    file_type: :string,
+    file_name: :string,
+    filename: :string,
+    filesize: :integer
+  }
+
+  def changeset(params \\ %{}) do
+    {params, @types}
+    |> cast(params, [:filename, :filesize, :"customer-id"])
+    |> validate_required([:filename, :filesize, :"customer-id"])
+    |> validate_number(:filesize, less_than: 10_000_000)
+    |> validate_format(:filename, ~r/\./, message: "file name needs to have extension")
+    |> put_required_fields()
+    |> delete_virtual_fields([:filename, :filesize, :"customer-id"])
+    |> validate_length(:file_type, min: 2, max: 5)
+    |> validate_length(:file_name, min: 2, max: 100)
+    |> validate_inclusion(:file_type, @allowed_extensions, message: "file extension not supported")
+  end
+
+  defp put_required_fields(
+         %Ecto.Changeset{
+           changes: %{
+             "customer-id": customer_id,
+             filename: full_file_name,
+             filesize: file_size
+           }
+         } = changeset
+       ) do
+    {file_name, file_type} = split_filename(full_file_name)
+
+    changeset
+    |> put_change(:file_name, file_name)
+    |> put_change(:file_type, file_type)
+    |> put_change(:file_size, file_size)
+    |> put_change(:customer_id, customer_id)
+  end
+
+  defp delete_virtual_fields(changeset, virtual_fields) do
+    Enum.reduce(virtual_fields, changeset, &delete_change(&2, &1))
+  end
+
+  defp split_filename(full_file_name) do
+    unstandarized_file_type = Path.extname(full_file_name)
+    file_name = Path.basename(full_file_name, unstandarized_file_type)
+    file_type = standarize_extension(unstandarized_file_type)
+    {file_name, file_type}
+  end
+
+  defp standarize_extension(ext) do
+    ext
+    |> strip_dot_from_extension()
+    |> String.downcase()
+  end
+
+  defp strip_dot_from_extension("." <> ext), do: ext
+  defp strip_dot_from_extension(ext), do: ext
+end
+```
+
+```elixir
+AttachmentParamsSchemaless.changeset(doc["data"]["attributes"])
+```

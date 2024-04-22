@@ -1,0 +1,31 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:floki, "~> 0.35.2"}
+])
+```
+
+## Section
+
+```elixir
+File.read!("/home/kuku/Elixir Companies.html")
+|> Floki.parse_document!()
+|> Floki.find(".company")
+# |> Enum.take(1)
+|> Enum.map(fn company ->
+  [{"p", _classes, info}] =
+    company
+    |> Floki.find(".company-info p")
+
+  info
+  |> IO.inspect(pretty: true, limit: 10)
+
+  %{
+    name: company |> Floki.find(".title a") |> Floki.text(),
+    url: company |> Floki.find(".title a") |> Floki.attribute("href"),
+    company_description: company |> Floki.find(".company-description") |> Floki.text(),
+    company_info: company |> Floki.find(".company-info") |> Floki.text()
+  }
+end)
+```

@@ -1,0 +1,289 @@
+<!-- livebook:{"app_settings":{"slug":"kuku"}} -->
+
+# ex_sky
+
+```elixir
+Mix.install([:req, :kino, :phoenix_live_view],
+  consolidate_protocols: false
+)
+```
+
+## Section
+
+```elixir
+url_template =
+  "https://api.pirateweather.net/forecast/<%= api_key %>/<%= latitude %>,<%= longitude %>"
+
+url =
+  EEx.eval_string(url_template,
+    api_key: System.get_env("LB_PIRATE_WEATHER"),
+    latitude: System.get_env("LB_LATITUDE"),
+    longitude: System.get_env("LB_LONGITUDE")
+  )
+
+raw_prediction = Req.get!(url, decode_body: false)
+```
+
+```elixir
+[
+  api_key: System.get_env("LB_PIRATE_WEATHER"),
+  latitude: System.get_env("LB_LATITUDE"),
+  longitude: System.get_env("LB_LONGITUDE")
+]
+```
+
+```elixir
+decoded =
+  Jason.decode!(raw_prediction.body,
+    keys: fn key ->
+      key
+      |> Macro.underscore()
+      |> String.to_atom()
+    end
+  )
+```
+
+```elixir
+Kino.HTML.new("""
+<div>
+  <div class="timeline" style="width: 852px; position: relative; height: 95px;">
+    <div class="stripes" style="height: 44px; width: 100%; position: absolute; top: 0px; overflow: hidden; border-radius: 5px;">
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 142px; left: 0px; background-color: rgb(182, 191, 203); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Cloudy">Cloudy</span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 177.5px; left: 142px; background-color: rgb(128, 165, 214); color: rgb(255, 255, 255); text-shadow: rgba(0, 0, 0, 0.5) 1px 1px 0px; opacity: 1;" title="Light Rain">Light Rain</span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 35.5px; left: 319.5px; background-color: rgb(166, 185, 211); color: rgb(255, 255, 255); text-shadow: rgba(0, 0, 0, 0.5) 1px 1px 0px; opacity: 1;" title="Drizzle (61%)">
+      </span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 35.5px; left: 355px; background-color: rgb(182, 191, 203); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Cloudy">
+      </span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 71px; left: 390.5px; background-color: rgb(238, 238, 245); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Clear">Clear</span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 248.5px; left: 461.5px; background-color: rgb(182, 191, 203); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Cloudy">Cloudy</span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 35.5px; left: 710px; background-color: rgb(213, 218, 226); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Partly Cloudy">
+      </span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 71px; left: 745.5px; background-color: rgb(182, 191, 203); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Cloudy">Cloudy</span>
+      <span class="stripe" style="height: 100%; position: absolute; line-height: 40px; text-align: center; font-size: 13px; font-weight: 400; width: 35.5px; left: 816.5px; background-color: rgb(238, 238, 245); color: rgb(51, 51, 51); text-shadow: rgba(255, 255, 255, 0.5) 1px 1px 0px; opacity: 1;" title="Clear">
+      </span>
+      <div style="background: rgba(255, 0, 0, 0.5); width: 1px; height: 100%; position: absolute; left: 1.35267px;">
+      </div>
+    </div>
+  </div>
+</div>
+""")
+```
+
+```elixir
+
+```
+
+```elixir
+defmodule Style do
+  @moduledoc """
+  Generates inline style from keyword list.
+  Atoms are dasherized - :font_weight becomes font-weight
+  Keep in mind that by default numbers are rounded and expanded with px
+  If you need a number without the suffix just pass it as a string eg: "500"
+  ## Examples
+  > Style.encode(position: :absolute, left: 0, top: 70, width: "100%", font_weight: "300") |> IO.puts()
+  position: absolute; left: 0px; top: 70px; width: 100%; font-weight: 300
+  """
+  defmodule RGB do
+    defstruct [:r, :g, :b, :a]
+
+    def parse("#" <> <<red::binary-size(2), green::binary-size(2), blue::binary-size(2)>>) do
+      {r, ""} = Integer.parse(red, 16)
+      {g, ""} = Integer.parse(green, 16)
+      {b, ""} = Integer.parse(blue, 16)
+      %__MODULE__{r: r, g: g, b: b}
+    end
+
+    def is_dark?(%__MODULE__{r: r, g: g, b: b}) do
+      r * 0.299 + g * 0.587 + b * 0.114 > 186
+    end
+
+    defimpl String.Chars do
+      def to_string(%RGB{r: r, g: g, b: b}) do
+        ["#", to_hex(r), to_hex(g), to_hex(b)] |> IO.iodata_to_binary()
+      end
+
+      defp to_hex(int) when is_float(int), do: to_hex(round(int))
+      defp to_hex(int), do: String.pad_leading(Integer.to_string(int, 16), 2, "0")
+    end
+  end
+
+  defimpl String.Chars do
+    def to_string(iodata), do: IO.iodata_to_binary(iodata)
+  end
+
+  def encode(style, encoded \\ []) do
+    case Enum.reverse(style) do
+      [] ->
+        encoded
+
+      [{key, value}, []] ->
+        [dasherize(key), ": ", value(value), "; " | encoded]
+
+      [{key, value} | rest] ->
+        [encode(rest), dasherize(key), ": ", value(value), "; " | encoded]
+    end
+  end
+
+  defp dasherize(key), do: key |> to_string |> String.replace("_", "-")
+  defp value(value) when is_integer(value), do: Integer.to_string(value) <> "px"
+  defp value(value) when is_float(value), do: value(round(value))
+  defp value(value), do: to_string(value)
+end
+
+defmodule Demo do
+  def style do
+    [
+      height: 12,
+      line_height: 40,
+      position: :absolute,
+      left: 0,
+      top: 70,
+      width: "100%",
+      font_weight: "300",
+      color: %Style.RGB{r: 1.5, g: 127, b: 255}
+    ]
+  end
+end
+
+Style.encode(Demo.style())
+|> IO.puts()
+
+Style.encode(position: "absolute", top: 70, width: "100%", font_weight: "300")
+|> IO.puts()
+```
+
+```elixir
+defmodule Kino.HTMLx do
+  @moduledoc ~S'''
+  A kino for rendering HTML content.
+
+  The HTML may include `<script>` tags with global JS to be executed.
+
+  In case you need to parameterize the HTML with dynamic values, write
+  a custom `Kino.JS` component.
+
+  ## Examples
+
+      Kino.HTML.new("""
+      <h3>Look!</h3>
+
+      <p>I wrote this HTML from <strong>Kino</strong>!</p>
+      """)
+
+      Kino.HTML.new("""
+      <button id="button">Click</button>
+
+      <script>
+        const button = document.querySelector("#button");
+
+        button.addEventListener("click", (event) => {
+          button.textContent = "Clicked!"
+        });
+      </script>
+      """)
+
+  '''
+
+  use Kino.JS
+
+  @type t :: Kino.JS.t()
+
+  @doc """
+  Creates a new kino displaying the given HTML.
+  """
+  @spec new(String.t()) :: t()
+  def new(html) when is_binary(html) do
+    Kino.JS.new(__MODULE__, html)
+  end
+
+  asset "main.js" do
+    """
+    export function init(ctx, html) {
+      ctx.importJS("https://cdn.tailwindcss.com").then(_ =>
+      setInnerHTML(ctx.root, html));
+    }
+
+    function setInnerHTML(element, html) {
+      // By default setting inner HTML doesn't execute scripts, as
+      // noted in [1], however we can work around this by explicitly
+      // building the script element.
+      //
+      // [1]: https://developer.mozilla.org/en-US/docs/Web/API/Element/innerHTML#security_considerations
+
+      element.innerHTML = html;
+
+      Array.from(element.querySelectorAll("script")).forEach((scriptEl) => {
+        const safeScriptEl = document.createElement("script");
+
+        Array.from(scriptEl.attributes).forEach((attr) => {
+          safeScriptEl.setAttribute(attr.name, attr.value)
+        });
+
+        const scriptText = document.createTextNode(scriptEl.innerHTML);
+        safeScriptEl.appendChild(scriptText);
+
+        scriptEl.parentNode.replaceChild(safeScriptEl, scriptEl);
+      });
+    }
+    """
+  end
+end
+```
+
+```elixir
+width = 850
+height = 100
+
+defmodule MerryTimeline do
+  use Phoenix.Component
+
+  def render(assigns) do
+    ~H"""
+    <div>
+      <div class="timeline relative" style={Style.encode(width: @width, height: @height)}>
+        <div class="stripes absolute left-0 top-0 w-full overflow-hidden rounded-md h-10">
+          <span class="stripe h-full absolute leading-10 text-center text-md font-normal opacity-100" 
+          :for={x <- 0..9} 
+          style={Style.encode(
+              width: 85,
+              left: x * 85,
+              background_color: %Style.RGB{r: x * 25, g: x * 25, b: x * 25},
+              color: to_string(unless Style.RGB.is_dark?(%Style.RGB{r: x * 25, g: x * 25, b: x * 25}) do %Style.RGB{r: 255, g: 255, b: 255} else %Style.RGB{r: 51, g: 51, b: 51} end),
+              text_shadow: to_string(unless Style.RGB.is_dark?(%Style.RGB{r: x * 25, g: x * 25, b: x * 25}) do %Style.RGB{r: 0, g: 0, b: 0, a: 0.5} else %Style.RGB{r: 255, g: 255, b: 255, a: 0.5} end) <> " 1px 1px 0px"
+              )}>Light Rain</span>
+        </div>
+        <div class="ticks absolute left-0 top-10 w-full h-6 font-medium text-sm">
+          <span :for={tick <- 0..24} 
+          class={["tick", if rem(tick, 2) == 1 do :even else :odd end, "absolute border-l-gray-500 border-l"]}
+            style={Style.encode(height: 5 + rem(tick, 2) * 3, left: tick * @width / 24)}>
+            </span>
+        </div>
+        <div class="hours absolute left-0 top-12 w-full h-4 font-medium text-sm">
+          <span :for={tick <- 0..12} 
+          class="hour text-center inline-block absolute w-10 h-5"
+          style={Style.encode(left: tick * @width / 12 , margin_left: if tick == 0 do 0 else -20 end)}>
+            <%= tick * 2 %>h
+          </span>
+        </div>
+        <div class="annotations absolute left-0 top-16 w-full font-light">
+          <span :for={tick <- 0..12} 
+            class="annotation text-center inline-block absolute w-10 h-5 font-light"
+            style={Style.encode(left:  tick * @width / 12 , margin_left: if tick == 0 do 0 else -20 end)}>
+            <%= 24 - (tick * 2) %>
+          </span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+end
+
+MerryTimeline.render(%{width: width, height: height})
+|> Phoenix.HTML.Safe.to_iodata()
+|> IO.iodata_to_binary()
+|> IO.inspect(printable_limit: :infinity)
+|> Kino.HTMLx.new()
+```
+
+<!-- livebook:{"offset":10793,"stamp":{"token":"QTEyOEdDTQ.36raqUaQiIhIiTCOVq5Oa-NEi8CjTaKFmCpTFQeCpfhKHIIgk3AHG1kdrSE.fyiPYpnJ5WHZ6WWG.Gb4Gk0JuICyT61rR0wjmIJ-i89BcT903YB3-90hRbZOiX0FgdOZvJaT9NHvkC2NjLFhEoW9yQcPArDAi-9VJlhjc6kJ00QqwayOUrVk.jjQGt7bPXPXvBFe-2bifaQ","version":1}} -->

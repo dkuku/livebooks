@@ -1,0 +1,174 @@
+# FitReader
+
+```elixir
+Mix.install([:fitreader, :req, :kino, :inflex])
+```
+
+## Section
+
+```elixir
+{:ok, pid} = Fit.read("/home/kuku/11240774353_ACTIVITY.fit")
+Fit.record(pid, 3)
+```
+
+```elixir
+
+```
+
+```elixir
+field = 325
+
+Fit.record(pid, field)
+|> Enum.take(1)
+|> IO.inspect()
+
+Fit.record(pid, field)
+```
+
+```elixir
+fit =
+  "/home/kuku/Projects/fit_decoder/priv/fit.json"
+  |> File.read!()
+  |> Jason.decode!()
+
+Kino.Tree.new(fit)
+```
+
+```elixir
+num_mesg = for {m, n} <- fit["MesgNum"], into: %{}, do: {n, String.to_atom(Inflex.underscore(m))}
+```
+
+```elixir
+defmodule FitDecoder.Header do
+  defstruct [:protocol_version, :profile_version, :data_size, :header_crc, :crc]
+
+  def parse(
+        <<14, protocol_version::size(8), profile_version::little-size(16),
+          data_size::little-size(32), ?., ?F, ?I, ?T, header_crc::little-size(16),
+          rest::bytes-size(data_size), crc::size(16)>>
+      ) do
+    {%__MODULE__{
+       protocol_version: protocol_version,
+       profile_version: profile_version,
+       data_size: data_size,
+       header_crc: header_crc,
+       crc: crc
+     }, rest}
+  end
+
+  def parse(
+        <<12, protocol_version::size(8), profile_version::little-size(16),
+          data_size::little-size(32), ?., ?F, ?I, ?T, rest::bytes-size(data_size), crc::size(16)>>
+      ) do
+    {%__MODULE__{
+       protocol_version: protocol_version,
+       profile_version: profile_version,
+       data_size: data_size,
+       header_crc: nil,
+       crc: crc
+     }, rest}
+  end
+end
+```
+
+```elixir
+defmodule FitDecoder.DefinitionMessage do
+  def parse(
+        <<_reserved::size(8), endianess::size(8), message_number::little-size(16),
+          fields::size(8)>> <> rest,
+        acc,
+        settings
+      ) do
+    endianess = if endianess == 1, do: :big, else: :little
+    acc = %{acc | endianess: endianess}
+    parse_fields(rest, fields, acc, settings)
+  end
+
+  def parse_fields(rest, 0, acc, _) do
+    {acc, rest}
+  end
+
+  def parse_fields(
+        <<field_definition::size(8), size::size(8), endian::size(1), _::size(2),
+          base_type_number::size(5)>> <> rest,
+        fields,
+        acc,
+        settings
+      ) do
+    <<data::little-size(size * 8), rest1::binary>> = rest
+    %{acc | fields: [data | acc.fields]}
+    {{settings[field_definition], size, base_type_number, data}, acc}
+  end
+end
+
+defmodule FitDecoder.Message do
+  def parse(data, %{type: :definition} = acc, settings) do
+    FitDecoder.DefinitionMessage.parse(data, acc, settings)
+  end
+end
+
+defmodule FitDecoder.RecordHeader do
+  @normal_header 0
+  @compressed_header 1
+  def parse(
+        <<@normal_header::size(1), type::size(1), type_specific::size(1), reserved::size(1),
+          local_type::size(4)>> <> rest,
+        acc
+      ) do
+    type = if type == 1, do: :definition, else: :data
+    {%{acc | type: type, type_specific: type_specific, local_type: local_type}, rest}
+  end
+
+  def parse(
+        <<@compressed_header::size(1), local_type::size(2), timestamp_offset::size(5)>> <>
+          rest,
+        acc
+      ) do
+    {%{acc | type: :timestamp, local_type: local_type, timestamp_offset: timestamp_offset}, rest}
+  end
+end
+
+defmodule FitDecoder.Record do
+  defstruct [:endianess, :type, :type_specific, :local_type, :fields, :timestamp_offset]
+
+  def parse(data, settings) do
+    {acc, rest} = FitDecoder.RecordHeader.parse(data, %__MODULE__{})
+    FitDecoder.Message.parse(rest, acc, settings)
+  end
+end
+
+defmodule FitDecoder do
+  def decode(file, settings) do
+    {header, records} = FitDecoder.Header.parse(file)
+    IO.inspect(header)
+    FitDecoder.Record.parse(records, settings)
+  end
+end
+
+File.read!("/home/kuku/11240774353_ACTIVITY.fit")
+|> IO.inspect()
+|> FitDecoder.decode(num_mesg)
+```
+
+```elixir
+"/home/kuku/profile.js"
+|> File.read!()
+# |> String.downcase()
+|> String.replace("{", "%{")
+|> String.replace("/", "#")
+|> String.replace(~r"(\s\d+):", " \\1 => ")
+|> String.replace(~r"(\s0x[0-9A-F]+):", " \\1 => ")
+|> String.replace(":[", ": [")
+|> String.replace(" :", ":")
+|> String.replace("export default Profile;", "end\nend")
+|> String.replace("const Profile =", "defmodule Profile do\n def parse do")
+|> Code.string_to_quoted!()
+# |> elem(2)
+# |> Enum.at(1)
+|> Code.compile_quoted()
+```
+
+```elixir
+<<x::little-size(32)>> = <<2, 0, 0, 0>>
+x
+```

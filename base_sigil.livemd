@@ -1,0 +1,41 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  # {:hexdump, "~> 0.1.2"}
+  {:hexdump, path: "/home/kuku/Projects/hexdump"}
+])
+
+Hexdump.on()
+```
+
+## Section
+
+```elixir
+defmodule BaseSigils do
+  defmacro sigil_OX(string, []) do
+    {val, []} =
+      quote do
+        unquote(string)
+        |> String.split([" ", "0x"])
+        |> Enum.map_join(&Base.decode16!/1)
+      end
+      |> Code.eval_quoted()
+
+    val
+  end
+end
+```
+
+```elixir
+import BaseSigils
+IO.inspect("ABCD234234234aaaaaa")
+~OX<0x4142  0x43> <> a = "ABC123"
+a
+```
+
+```elixir
+for _ <- 0..512, into: <<>> do
+  <<Enum.random(0..255)>>
+end
+```
