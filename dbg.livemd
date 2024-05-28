@@ -39,6 +39,51 @@ Application.put_env(:elixir, :dbg_callback, {DBG, :dbg, []})
 ```
 
 ```elixir
+(
+  a = 3 + 1
+  b = 3
+  a + b
+)
+|> dbg
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+line 2: a = 3 + 1: 4
+line 3: b = 3: 3
+line 4: a + b: 7
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+7
+```
+
+```elixir
+dbg do
+  a = 3 + 1
+  b = 3
+  a + b
+end
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+line 2: a = 3 + 1: 4
+line 3: b = 3: 3
+line 4: a + b: 7
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[do: 7]
+```
+
+```elixir
 defmodule XXX do
   def function(_x) do
     a = 1
