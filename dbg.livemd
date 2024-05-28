@@ -1,0 +1,74 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# custom dbg inspect
+
+## Section
+
+```elixir
+defmodule DBG do
+  def dbg([do: {op, meta, clauses}], options, env) do
+    dbg({op, meta, clauses}, options, env)
+  end
+
+  def dbg({op, meta, clauses}, _options, _env) do
+    clauses = Enum.map(clauses, &wrap_in_inspect/1)
+    {op, meta, clauses}
+  end
+
+  def wrap_in_inspect({_op, meta, _data} = ast) do
+    label = ast |> Macro.to_string() |> String.replace(~r/\s\s+/, " ")
+    {{:., meta, [{:__aliases__, meta, [:IO]}, :inspect]}, meta, [ast, [label: label]]}
+  end
+end
+
+Application.put_env(:elixir, :dbg_callback, {DBG, :dbg, []})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+```elixir
+dbg do
+  a = 1
+  b = 3
+  d = a + b
+
+  c =
+    if a == 2 do
+      2
+    else
+      b
+    end
+
+  with e <- 1 + c,
+       f = b * e do
+    f + e
+  end
+
+  for g <- a..d, h <- b..c do
+    g + h
+  end
+end
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+a = 1: 1
+b = 3: 3
+d = a + b: 4
+c = if a == 2 do 2 else b end: 3
+with e <- 1 + c, f = b * e do f + e
+end: 16
+for g <- a..d, h <- b..c do g + h
+end: [4, 5, 6, 7]
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[4, 5, 6, 7]
+```

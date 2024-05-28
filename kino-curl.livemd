@@ -7,7 +7,7 @@ Mix.install([
 ])
 ```
 
-## Sectionw
+## Section
 
 ```elixir
 defmodule CurlParser do
@@ -95,6 +95,7 @@ Kino.listen(form, fn %{data: %{curl: curl}, origin: _origin} ->
         body: curl.body
       )
 
+    IO.inspect(resp)
     html = Kino.HTML.new(resp.body)
     Kino.Frame.append(frame, html)
   end
