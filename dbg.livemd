@@ -7,17 +7,25 @@
 ```elixir
 defmodule DBG do
   def dbg([do: {op, meta, clauses}], options, env) do
-    dbg({op, meta, clauses}, options, env)
+    [do: dbg({op, meta, clauses}, options, env)]
   end
 
-  def dbg({op, meta, clauses}, _options, _env) do
-    clauses = Enum.map(clauses, &wrap_in_inspect/1)
+  def dbg({op, meta, clauses}, options, env) when op in [:__block__, :def, :defmodule] do
+    clauses = Enum.map(clauses, &dbg(&1, options, env))
     {op, meta, clauses}
   end
 
-  def wrap_in_inspect({_op, meta, _data} = ast) do
+  @kernel (Kernel.SpecialForms.__info__(:macros) ++
+             Kernel.__info__(:macros) ++ Kernel.__info__(:functions))
+          |> Keyword.keys()
+  def dbg({op, meta, _data} = ast, _options, _env) when op in @kernel do
     label = ast |> Macro.to_string() |> String.replace(~r/\s\s+/, " ")
+    label = "line #{meta[:line]}: " <> label
     {{:., meta, [{:__aliases__, meta, [:IO]}, :inspect]}, meta, [ast, [label: label]]}
+  end
+
+  def dbg({_op, _, _} = ast, _, _) do
+    ast
   end
 end
 
@@ -31,44 +39,56 @@ Application.put_env(:elixir, :dbg_callback, {DBG, :dbg, []})
 ```
 
 ```elixir
-dbg do
-  a = 1
-  b = 3
-  d = a + b
+defmodule XXX do
+  def function(_x) do
+    a = 1
+    b = 3
+    d = a + b
 
-  c =
-    if a == 2 do
-      2
-    else
-      b
+    c =
+      if a == 2 do
+        2
+      else
+        b
+      end
+
+    i =
+      with e <- 1 + c,
+           f = b * e do
+        f + e
+      end
+
+    for g <- a..d, h <- b..c do
+      g + h + i
     end
-
-  with e <- 1 + c,
-       f = b * e do
-    f + e
   end
 
-  for g <- a..d, h <- b..c do
-    g + h
+  def fun(a, b) do
+    a + b
   end
 end
+|> dbg()
+
+XXX.function(1)
+XXX.fun(1, 2)
 ```
 
 <!-- livebook:{"output":true} -->
 
 ```
-a = 1: 1
-b = 3: 3
-d = a + b: 4
-c = if a == 2 do 2 else b end: 3
-with e <- 1 + c, f = b * e do f + e
-end: 16
-for g <- a..d, h <- b..c do g + h
-end: [4, 5, 6, 7]
+line 1: XXX: XXX
+line 3: a = 1: 1
+line 4: b = 3: 3
+line 5: d = a + b: 4
+line 7: c = if a == 2 do 2 else b end: 3
+line 14: i = with e <- 1 + c, f = b * e do f + e end: 16
+line 20: for g <- a..d, h <- b..c do g + h + i
+end: [20, 21, 22, 23]
+line 26: a + b: 3
 ```
 
 <!-- livebook:{"output":true} -->
 
 ```
-[4, 5, 6, 7]
+3
 ```
