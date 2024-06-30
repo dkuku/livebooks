@@ -1,0 +1,155 @@
+# Brave Search Rag
+
+```elixir
+Mix.install(
+  [
+    {:req, "> 0.0.0"},
+    {:instructor, github: "agoodway/instructor_ex", branch: "fixes"},
+    {:kino, "~> 0.12.0"}
+  ],
+  config: [
+    instructor: [
+      adapter: Instructor.Adapters.OpenAI,
+      openai: [api_key: System.fetch_env!("LB_OPENAI_API_KEY")]
+    ]
+  ]
+)
+```
+
+## Requirments
+
+This LiveBook Notebook requires 2 API keys:
+
+* Brave Search API: https://brave.com/search/api/
+  * The Brave API Key must have access to the Data for AI Pro plan.
+  * `PRO_BRAVE_API_KEY` secret needs to be set
+* OpenAI API: https://openai.com/index/openai-api/
+  * `OPENAI_API_KEY` secret needs to be set
+
+## Define Instructor Schema
+
+````elixir
+defmodule Researcher do
+  use Ecto.Schema
+  use Instructor.Validator
+
+  @doc """
+  ## Field Descriptions:
+  - response: answer to the prompt
+  - related_questions: a list of questions related to the prompt, limit to a max of 3
+  ## Additional Instructions
+  - set all id fields to nil
+  """
+  @primary_key false
+  embedded_schema do
+    field(:response, :string)
+
+    embeds_many :related_questions, Question do
+      field(:content, :string)
+    end
+  end
+
+  @impl true
+  def validate_changeset(changeset) do
+    changeset
+  end
+
+  def prompt(text, context) do
+    Instructor.chat_completion(
+      model: "gpt-3.5-turbo",
+      response_model: Researcher,
+      max_retries: 3,
+      messages: [
+        %{
+          role: "system",
+          content: "You are an expert researcher."
+        },
+        %{
+          role: "user",
+          content: """
+          Use the following context to enrich your answer to the prompt: 
+          ```
+          #{context}
+          ```
+          """
+        },
+        %{
+          role: "user",
+          content: """
+          Prompt: 
+          ```
+          #{text}
+          ```
+          """
+        }
+      ]
+    )
+  end
+end
+````
+
+## Let's Go!
+
+```elixir
+defmodule BraveSearch do
+  def web_search(text) do
+    params = [summary: 1, q: text]
+    response = Req.get!(new(), url: "/res/v1/web/search", params: params)
+    response.body
+  end
+
+  def summarizer_search(summarizer_key) do
+    params = [entity_info: 1, key: summarizer_key]
+    response = Req.get!(new(), url: "/res/v1/summarizer/search", params: params)
+    response.body
+  end
+
+  defp new do
+    Req.new(
+      base_url: "https://api.search.brave.com/",
+      headers: [
+        {"X-Subscription-Token", System.fetch_env!("LB_PRO_BRAVE_API_KEY")},
+        {"Accept", "application/json"}
+      ]
+    )
+  end
+end
+```
+
+```elixir
+text_input = Kino.Input.textarea("Text", default: "What is the best way to cook chicken?")
+form = Kino.Control.form([text: text_input], submit: "Run")
+frame = Kino.Frame.new()
+
+Kino.listen(form, fn %{data: %{text: text}} ->
+  Kino.Frame.render(frame, Kino.Text.new("Running..."))
+
+  summarizer_key = BraveSearch.web_search(text)["summarizer"]["key"]
+
+  search_context =
+    BraveSearch.summarizer_search(summarizer_key)["summary"] |> List.first() |> Map.get("data")
+
+  {:ok, research} = Researcher.prompt(text, search_context)
+
+  html =
+    """
+    <h2>Answer</h2>
+    <p><%= @research.response %></p>
+    <br>
+
+    <h2>Related questions:</h2>
+    <ul>
+      <%= for question <- @research.related_questions do %>
+        <li><%= question.content %></li>
+      <% end %>
+    </ul>
+    """
+    |> EEx.eval_string(assigns: [research: research])
+
+  Kino.Frame.render(frame, Kino.HTML.new(html))
+end)
+
+Kino.Layout.grid([form, frame], boxed: true, gap: 16)
+```
+
+<!-- livebook:{"offset":3478,"stamp":{"token":"XCP.EeA8Fcox2XYomPUQz64akgHdZwg-j0MIZKjoJP5VldvAmnWnF1g3goHjUWUfP8X53h_T_mG8GJ4mJMm8tEEwznvMbxOvLFAT36FLoiTpasNKGSaEgPvWx3BggwiJO9Sm-6scxEbKFxBtp0Cox21jdAnG-NokrD0pZr8O7YoHf8LuX-ghBzBgyw047K8rkZ-EAViDqX6ht-AB","version":2}} -->
