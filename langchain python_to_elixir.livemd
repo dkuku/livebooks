@@ -1,0 +1,86 @@
+# Langchain basics: python to elixir
+
+```elixir
+Mix.install([
+  {:langchain, "~> 0.3.0-rc.0"}
+])
+```
+
+## Section
+
+Convert this code to elixir langchain
+
+```python
+import argparse
+from langchain_openai import OpenAI
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain, SequentialChain
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--task", default="return a list of numbers")
+parser.add_argument("--language", default="elixir")
+args = parser.parse_args()
+
+llm = OpenAI()
+code_prompt = PromptTemplate(
+    template="Write a very short {language} function tat will {task}",
+    input_variables = ["language", "task"]
+)
+test_prompt = PromptTemplate(
+    template="Write a test in {language} for the following code:\n{code}",
+    input_variables = ["language", "code"]
+)
+code_chain = LLMChain(llm = llm, prompt=code_prompt, output_key="code")
+test_chain = LLMChain(llm = llm, prompt=test_prompt, output_key="test")
+chain = SequentialChain(
+    chains=[code_chain, test_chain],
+    input_variables = ["language", "task"],
+    output_variables = ["test", "code"]
+)
+
+result = chain({"language": args.language, "task": args.task})
+print(result)
+```
+
+```elixir
+Application.put_env(:langchain, :openai_key, System.fetch_env!("LB_OPENAI_API_KEY"))
+```
+
+```elixir
+alias LangChain.PromptTemplate
+alias LangChain.Chains.LLMChain
+alias LangChain.ChatModels.ChatOpenAI
+alias LangChain.Message
+
+variables = %{language: "elixir", task: "add two numbers"}
+
+{:ok, code_prompt} =
+  PromptTemplate.from_template(
+    "Write a very short <%= @language %> function that will <%= @task %>\n return only the code"
+  )
+
+{:ok, test_prompt} =
+  PromptTemplate.from_template("Write a test in <%= @language %> for the following <%= @code %>")
+
+{:ok, updated_chain, response} =
+  %{llm: ChatOpenAI.new!(%{model: "gpt-4o"})}
+  |> LLMChain.new!()
+  |> LLMChain.add_messages([
+    Message.new_user!(PromptTemplate.format(code_prompt, variables))
+  ])
+  |> LLMChain.run()
+
+variables = Map.put(variables, :code, response.content)
+IO.puts(response.content)
+
+{:ok, updated_chain, response} =
+  updated_chain
+  |> LLMChain.add_messages([
+    Message.new_user!(PromptTemplate.format(test_prompt, variables))
+  ])
+  |> LLMChain.run()
+
+IO.puts(response.content)
+```
+
+<!-- livebook:{"offset":2264,"stamp":{"token":"XCP.pOMGukzo2BCaWox67sq6AiJtKEONCh2SsYURS4U7tlV4ibOt35w5ieU0lRWdR5X63Bb6OjET_q8plJbwmKOufhKvQNaIl7JDlac8Rf_panPeU8nDzttHweM","version":2}} -->

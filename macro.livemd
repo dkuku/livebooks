@@ -1,0 +1,226 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Fun with macros
+
+## Section
+
+[background](https://vignette.wikia.nocookie.net/strangerthings8338/images/3/32/Upside-Down-S2.png/revision/latest?cb=20180321034242)
+A macro is like the upside down world - it's simlar to the existing world but different in some way. The changes you make in upside down are reflected in the real world.
+Lets have a look at some examples:
+
+```elixir
+a = 1 + 1
+b = a * 2
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+4
+```
+
+```elixir
+quote do
+  a = 1 + 1
+  b = a * 2
+end
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:__block__, [],
+ [
+   {:=, [],
+    [{:a, [], Elixir}, {:+, [context: Elixir, imports: [{1, Kernel}, {2, Kernel}]], [1, 1]}]},
+   {:=, [],
+    [{:b, [], Elixir}, {:*, [context: Elixir, imports: [{2, Kernel}]], [{:a, [], Elixir}, 2]}]}
+ ]}
+```
+
+what it means:
+
+`a = 1 + 1` expands to:
+
+`{:=, [] = context, [left, right]}`
+
+`left` expands to `{:a, [] = context, Elixir}` and it is just a name of the variable.
+
+`right` is `1+1` and it's `{:+, context, [left, right]}` where `left` and `right` both equal to 1.
+The context `[context: Elixir, imports: [{1, Kernel}, {2, Kernel}]]`  just says that `+` is a function from `Kernel` and there is `+/1` and `+2` arity. It means you can use `+` also as one arity function `+1` which is the same as `1`
+
+What's the difference between `:=` and `:+`? `:=` did not have such context. It's because `=` is a special form not a function, this is not important for us right now.
+To run the quoted code we can use `Code.eval_quoted/2`
+
+```elixir
+quote do
+  a = 1 + 1
+  b = a * 2
+end
+|> Code.eval_quoted()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{4, [{{:b, Elixir}, 4}, {{:a, Elixir}, 2}]}
+```
+
+This returns the result and env where `a=2` and `b=4`
+Knowing this we can try to maniplate the ast:
+
+```elixir
+quote do
+  a = 1 + 1
+  b = a * 2
+end
+|> then(fn {:__block__, [], expressions} ->
+  modified_expressions =
+    Enum.map(
+      expressions,
+      fn {:=, [], [left, {operator, context, [l, r]} = _right]} ->
+        {:=, [], [left, {operator, context, [l, r * 2]}]}
+      end
+    )
+
+  {:__block__, [], modified_expressions}
+end)
+|> Code.eval_quoted()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{12, [{{:b, Elixir}, 12}, {{:a, Elixir}, 3}]}
+```
+
+what we did here is to mulitply the last integer by 2
+
+`a = 1 + 1` becomes `a = 1 + 2` and
+
+`b = a * 2` becomes `b = a * 4`
+
+`3 + 4` is `12` and thats what we can see in the values returned by `Code.eval_quoted()`
+
+`{12, [{{:b, Elixir}, 12}, {{:a, Elixir}, 3}]}`
+
+<!-- livebook:{"break_markdown":true} -->
+
+That's a simple example but where it can be useful?
+
+Elixir has the `dbg()` macro that modifies the ast to display intermediate results:
+
+```elixir
+"hello world"
+|> String.split()
+|> Enum.map(&String.upcase/1)
+|> Enum.join(" ")
+|> dbg()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[livemd/macro.livemd#cell:75yd7uy4siislwes:5: (file)]
+"hello world" #=> "hello world"
+|> String.split() #=> ["hello", "world"]
+|> Enum.map(&String.upcase/1) #=> ["HELLO", "WORLD"]
+|> Enum.join(" ") #=> "HELLO WORLD"
+
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+"HELLO WORLD"
+```
+
+```elixir
+defmodule DBG do
+  def dbg([do: {op, meta, clauses}], options, env) do
+    [do: dbg({op, meta, clauses}, options, env)]
+  end
+
+  def dbg({op, meta, clauses}, options, env) when op in [:__block__, :def, :defmodule] do
+    clauses = Enum.map(clauses, &dbg(&1, options, env))
+    {op, meta, clauses}
+  end
+
+  @kernel (Kernel.SpecialForms.__info__(:macros) ++
+             Kernel.__info__(:macros) ++ Kernel.__info__(:functions))
+          |> Keyword.keys()
+  def dbg({op, meta, _data} = ast, _options, _env) when op in @kernel do
+    label = ast |> Macro.to_string() |> String.replace(~r/\s\s+/, " ")
+    label = "line #{meta[:line]}: " <> label
+    {{:., meta, [{:__aliases__, meta, [:IO]}, :inspect]}, meta, [ast, [label: label]]}
+  end
+
+  def dbg({_op, _, _} = ast, _, _) do
+    ast
+  end
+end
+
+Application.put_env(:elixir, :dbg_callback, {DBG, :dbg, []})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
+```elixir
+defmodule XXX do
+  def function(_x) do
+    a = 1
+    b = 3
+    d = a + b
+
+    c =
+      if a == 2 do
+        2
+      else
+        b
+      end
+
+    i =
+      with e <- 1 + c,
+           f = b * e do
+        f + e
+      end
+
+    for g <- a..d, h <- b..c do
+      g + h + i
+    end
+  end
+
+  def fun(a, b) do
+    a + b
+  end
+end
+|> dbg()
+
+XXX.function(1)
+XXX.fun(1, 2)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+line 1: XXX: XXX
+line 3: a = 1: 1
+line 4: b = 3: 3
+line 5: d = a + b: 4
+line 7: c = if a == 2 do 2 else b end: 3
+line 14: i = with e <- 1 + c, f = b * e do f + e end: 16
+line 20: for g <- a..d, h <- b..c do g + h + i
+end: [20, 21, 22, 23]
+line 26: a + b: 3
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+3
+```
