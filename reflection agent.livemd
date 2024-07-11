@@ -1,0 +1,130 @@
+# Reflexion agent english
+
+```elixir
+Mix.install([
+  {:langchain, "~> 0.3.0-rc.0"},
+  {:instructor, github: "thmsmlr/instructor_ex"},
+  {:gen_state_machine, "~> 3.0"}
+])
+```
+
+## Section
+
+```elixir
+Application.put_env(:langchain, :openai_key, System.fetch_env!("LB_OPENAI_API_KEY"))
+```
+
+```elixir
+defmodule TwitterInfluencer do
+  alias LangChain.ChatModels.ChatOpenAI
+  alias LangChain.Chains.LLMChain
+  alias LangChain.Message
+
+  def model do
+  %{llm: ChatOpenAI.new!(%{model: "gpt-3.5-turbo", verbose: true})}
+  end
+  def create_reflection_chain do
+    model()
+    |> LLMChain.new!()
+    |> LLMChain.add_messages([
+      Message.new_system!(
+        "You are a viral twitter influencer grading a tweet. Generate critique" <>
+          "and recommendations for the user's tweet.  Always provide detailed" <>
+          "recommendations, including requests for length, virality, style, etc."
+      )
+    ])
+  end
+
+  def create_generation_chain do
+    model()
+    |> LLMChain.new!()
+    |> LLMChain.add_messages([
+      Message.new_system!(
+        "You are a twitter techie influencer assistant tasked with writing" <>
+          "excellent twitter posts.  Generate the best twitter post possible for the" <>
+          "user's request.  If the user provides critique, respond with a revised " <>
+          "version of your previous attempts."
+      )
+    ])
+  end
+
+  def generate_tweet(chain, message) when is_binary(message) do
+    generate_tweet(chain, Message.new_user!(message))
+  end
+  def generate_tweet(chain, message) do
+    {:ok, updated_chain, response} =
+      chain
+      |> LLMChain.add_messages([message])
+      |> LLMChain.run()
+
+    {response, updated_chain}
+  end
+
+  def reflect_on_tweet(chain, message) when is_binary(message) do
+    reflect_on_tweet(chain, Message.new_user!(message))
+  end
+  def reflect_on_tweet(chain, message) do
+    {:ok, updated_chain, response} =
+      chain
+      |> LLMChain.add_messages([message])
+      |> LLMChain.run()
+
+    {response, updated_chain}
+  end
+
+  def should_continue?(chain) do
+    length(chain.messages) < 5
+  end
+
+  def run_tweet_improvement_cycle(generate_chain, reflect_chain, initial_request) do
+    run_cycle(generate_chain, reflect_chain, initial_request, [])
+  end
+
+  defp run_cycle(generate_chain, reflect_chain, input, history) do
+    {tweet, updated_generate_chain} = generate_tweet(generate_chain, input)
+
+    if should_continue?(updated_generate_chain) do
+      {reflection, _} = reflect_on_tweet(reflect_chain, tweet)
+
+      run_cycle(
+        updated_generate_chain,
+        reflect_chain,
+        "Improve this tweet based on the following critique: #{reflection}",
+        history ++ [tweet, reflection]
+      )
+    else
+      history ++ [tweet]
+    end
+  end
+end
+
+```
+
+```elixir
+defmodule ExReflection do
+  def run(user_request) do
+    generate_chain = TwitterInfluencer.create_generation_chain()
+    reflect_chain = TwitterInfluencer.create_reflection_chain()
+
+
+    TwitterInfluencer.run_tweet_improvement_cycle(generate_chain, reflect_chain, user_request)
+    |> Enum.with_index()
+    |> Enum.each(fn {item, index} ->
+      type = if rem(index, 2) == 0, do: "Tweet", else: "Reflection"
+      IO.puts("#{type} #{div(index, 2) + 1}: #{item}")
+    end)
+  end
+end
+defimpl String.Chars, for: LangChain.Message do
+  def to_string(message) do
+    message.content
+  end
+end
+
+```
+
+```elixir
+
+```
+
+<!-- livebook:{"offset":3365,"stamp":{"token":"XCP.Uc2GbSj1KfOF2MRkyYKVR16ueHaIqbT-SnQzaRwVngf_WNeaSS2ZMdum148ts1bhhQaEghzPKqj0yJSTt-d4w4DL2IXA5O76_Cq4b3alPACUCiye41zl1Ow","version":2}} -->
