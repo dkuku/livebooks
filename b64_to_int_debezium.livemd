@@ -1,0 +1,36 @@
+# Untitled notebook
+
+```elixir
+Mix.install([
+  {:hexdump, "~> 0.1.4"}
+])
+```
+
+## Section
+
+```elixir
+defmodule B64ToFloat do
+  def to_float(b64) do
+    b64
+    |> Base.decode64!()
+    |> IO.inspect()
+    |> decode_signed()
+    |> Kernel./(100)
+  end
+
+  defp decode_signed(<<0::1, _rest::bitstring>> = binary) do
+    :binary.decode_unsigned(binary)
+  end
+
+  defp decode_signed(negative_binary) do
+    bitsize = bit_size(negative_binary)
+    <<negative_binary_as_number::size(bitsize)>> = negative_binary
+    positive_binary = <<Bitwise.bnot(negative_binary_as_number)::size(bitsize)>>
+    unsigned = :binary.decode_unsigned(positive_binary) + 1
+    -unsigned
+  end
+end
+
+# 0, 855, -15,
+Enum.map(["+iQ=", "AA==", "AU38", "+iQ="], &B64ToFloat.to_float/1) |> Enum.join("\n") |> IO.puts()
+```
