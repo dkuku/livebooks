@@ -1,0 +1,56 @@
+# assistant
+
+```elixir
+Mix.install([
+  {:req, "~> 0.5.6"},
+  {:membrane_core, "~> 1.1"},
+  {:membrane_mp3_mad_plugin, "~> 0.18.3"},
+  {:membrane_portaudio_plugin, "~> 0.19.2"},
+  {:membrane_hackney_plugin, "~> 0.11.0"},
+  {:jason, "~> 1.4"}
+])
+```
+
+## Section
+
+```elixir
+Req.get!("https://api.neets.ai/v1/voices").body |> Enum.filter(& &1["id"] =~ "pol")
+```
+
+```elixir
+defmodule TTSPipeline do
+  use Membrane.Pipeline
+
+  @impl true
+  def handle_init(_ctx, text) do
+    url = "https://api.neets.ai/v1/tts"
+    voice_id = "vits-pol-1"
+    model = "vits"
+    request = %{"text" => text, "voice_id" => voice_id, "params" => %{"model" => model}}
+
+    headers = [
+      {"accept", "audio/mp3"},
+      {"content-type", "application/json"},
+      {"x-api-key", System.get_env("LIVEBOOK_NEETS_API_KEY")}
+    ]
+
+    spec =
+      child(%Membrane.Hackney.Source{
+        location: url,
+        body: Jason.encode!(request),
+        hackney_opts: [follow_redirect: true],
+        headers: headers,
+        method: :post
+      })
+      |> child(Membrane.MP3.MAD.Decoder)
+      |> child(Membrane.PortAudio.Sink)
+
+    {[spec: spec], %{}}
+  end
+end
+
+text = "Jest godzina 20:21"
+Membrane.Pipeline.start_link(TTSPipeline, text)
+```
+
+<!-- livebook:{"offset":1214,"stamp":{"token":"XCP.CA8JQ92ZqIuBKd2wmdJ0oNy6nDm7cMX5IL5ix8ewch3-f70Dt1H3c0XN1U0pB-3r1-l8rsAV8RFKiD2hQECR_tPiv1Vkt3jOvL63YkkIHaYcFSflZ9D3_w","version":2}} -->

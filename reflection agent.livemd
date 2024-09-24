@@ -123,8 +123,4 @@ end
 
 ```
 
-```elixir
-
-```
-
-<!-- livebook:{"offset":3365,"stamp":{"token":"XCP.Uc2GbSj1KfOF2MRkyYKVR16ueHaIqbT-SnQzaRwVngf_WNeaSS2ZMdum148ts1bhhQaEghzPKqj0yJSTt-d4w4DL2IXA5O76_Cq4b3alPACUCiye41zl1Ow","version":2}} -->
+<!-- livebook:{"offset":3349,"stamp":{"token":"XCP.T01bEeLpfnQwTMxepfH7uKFU9zU9pq2xAmsrXF2nINFVYCZd4Qt9_NkJI4LXksDrvHH1DIGSxe1YwIv52V1bN96C55hhIysbfE87Sd2SsQgh4ibWUexOEUI","version":2}} -->
