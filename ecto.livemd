@@ -1,0 +1,151 @@
+# Ecto
+
+```elixir
+Mix.install([
+  {:ecto, "~> 3.12"},
+  {:ecto_sql, "~> 3.12"},
+  {:postgrex, github: "elixir-ecto/postgrex", override: true},
+  {:kino, "~> 0.11.0"},
+  {:kino_db, "~> 0.2.4"},
+  {:sqlcommenter, path: "/home/kuku/Projects/sqlcommenter"}
+])
+```
+
+## Setup
+
+```
+# docker run --rm -it -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:13.2
+```
+
+## Repo
+
+```elixir
+defmodule Test.Repo do
+  use Sqlcommenter.Repo,
+    otp_app: :my_app,
+    adapter: Ecto.Adapters.Postgres,
+    sqlcommenter: [app: "test_app", owner: "team_c"]
+end
+
+defmodule Test.MigrationRepo do
+  use Ecto.Repo,
+    otp_app: :my_app,
+    adapter: Ecto.Adapters.Postgres,
+    priv: "priv/repo"
+  end
+```
+
+```elixir
+
+Kino.start_child({Test.Repo, url: "postgres://postgres:postgres@localhost/postgres"})
+```
+
+```elixir
+Kino.start_child({Test.MigrationRepo, url: "postgres://postgres:postgres@localhost/postgres"})
+```
+
+## Queries
+
+```elixir
+Ecto.Adapters.SQL.query!(Test.Repo, "create table if not exists users (id int)", [], comment: "123")
+```
+
+```elixir
+Ecto.Adapters.SQL.query!(Test.Repo, "insert into users values (1)")
+```
+
+```elixir
+Ecto.Adapters.SQL.query!(Test.Repo, "select * from users")
+```
+
+## Ecto migration
+
+```elixir
+defmodule Migrations.AddWeatherTable do
+  use Ecto.Migration
+
+  def up do
+    create table("weather") do
+      add(:city, :string, size: 40)
+      add(:temp_lo, :integer)
+      add(:temp_hi, :integer)
+      add(:prcp, :float)
+
+      timestamps()
+    end
+  end
+
+  def down do
+    drop(table("weather"))
+  end
+end
+```
+
+```elixir
+Ecto.Migrator.up(Test.MigrationRepo, 1, Migrations.AddWeatherTable)
+```
+
+## Schema
+
+```elixir
+defmodule Weather do
+  use Ecto.Schema
+
+  schema "weather" do
+    field(:city, :string)
+    field(:temp_lo, :integer)
+    field(:temp_hi, :integer)
+    field(:prcp, :float, default: 0.0)
+
+    timestamps()
+  end
+end
+```
+
+```elixir
+
+```
+
+```elixir
+defmodule W do
+  require Test.Repo
+  alias Test.Repo
+  import Ecto.Query
+
+  def insert do
+    weather1 = %Weather{temp_lo: 0, temp_hi: 23}
+    weather2 = %Weather{temp_lo: 2, temp_hi: 23}
+    Repo.insert!(weather1)
+    Repo.insert!(weather2)
+  end
+
+  def get_query do
+    values = [%{id: 1, name: "Zabrze"}, %{id: 2, name: "Dudley"}]
+    Weather
+    |> join(:inner, [w], w1 in values(values, %{id: :integer, name: :string}), on: w.id == w1.id)
+    |> select([w, c], %Weather{id: w.id, city: c.name})
+    |> Repo.all()
+  end
+
+  def get_schema do
+    Weather
+    |> select([w], %Weather{id: w.id})
+    |> where([w], not is_nil(w.id))
+    |> Repo.all()
+  end
+end
+
+```
+
+```elixir
+W.insert()
+```
+
+```elixir
+
+W.get_query()
+```
+
+```elixir
+W.get_schema()
+```
