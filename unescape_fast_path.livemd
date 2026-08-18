@@ -1,0 +1,709 @@
+# Skip the copy: a fast path for unescape_chars/2
+
+```elixir
+Mix.install([
+  {:benchee, "~> 1.3"},
+  {:kino, "~> 0.14"},
+  {:kino_vega_lite, "~> 0.1"}
+])
+
+alias VegaLite, as: Vl
+
+# one variant = one color, everywhere
+palette = [
+  {"A current (copy all)", "#8a8984"},
+  {"B skip if no \\", "#2a78d6"},
+  {"C + prefix copy", "#eb6834"},
+  {"D + compiled pattern", "#1baf7a"}
+]
+
+color = [
+  field: "variant",
+  type: :nominal,
+  scale: [domain: Enum.map(palette, &elem(&1, 0)), range: Enum.map(palette, &elem(&1, 1))],
+  title: nil
+]
+
+# pick the Elixir checkout to measure: scan common project dirs for a repo
+# that has elixir_interpolation.erl, fall back to the current directory
+repo_candidates =
+  ["~/Projects/*", "~/projects/*", "~/src/*", "~/code/*", "~/git/*", File.cwd!()]
+  |> Enum.flat_map(&Path.wildcard(Path.expand(&1)))
+  |> Enum.filter(&File.exists?(Path.join(&1, "lib/elixir/src/elixir_interpolation.erl")))
+  |> Enum.uniq()
+  |> case do
+    [] -> [File.cwd!()]
+    found -> found
+  end
+
+repo_input = Kino.Input.select("Elixir repo", Enum.map(repo_candidates, &{&1, &1}))
+```
+
+## The change
+
+`elixir_interpolation:unescape_chars/2` copies **every string literal in every
+compiled file** byte by byte, whether or not it contains an escape. The proposal:
+look for a backslash first, return the input untouched when there is none.
+
+<!-- livebook:{"force_markdown":true} -->
+
+```erlang
+unescape_chars(String, Map) ->
+  case binary:match(String, <<$\\>>) of
+    nomatch -> String;
+    _ -> unescape_chars(String, Map, <<>>)
+  end.
+```
+
+The pattern is a single byte, so `binary:match/2` compiles it cheaply and scans
+memchr-style — none of the multi-pattern caveats apply.
+
+## 1. What the compiler actually unescapes
+
+Tokenizing with `unescape: false` collects exactly the raw binaries handed to
+`unescape_chars/2` — one pass over the Elixir repo itself.
+
+```elixir
+defmodule Corpus do
+  def from_repo(root) do
+    Path.wildcard(Path.join(root, "lib/**/*.{ex,exs}"))
+    |> Enum.filter(&File.regular?/1)
+    |> Enum.flat_map(fn file ->
+      case :elixir_tokenizer.tokenize(String.to_charlist(File.read!(file)), 1, 1, unescape: false) do
+        {:ok, _, _, _, tokens} -> collect(tokens)
+        {:ok, _, _, _, tokens, _} -> collect(tokens)
+        _ -> []
+      end
+    end)
+  end
+
+  defp collect(tokens), do: walk(tokens, [])
+
+  defp walk(list, acc) when is_list(list), do: Enum.reduce(list, acc, &walk/2)
+  defp walk({:bin_string, _, parts}, acc), do: parts_of(parts, acc)
+  defp walk({:list_string, _, parts}, acc), do: parts_of(parts, acc)
+  defp walk({:bin_heredoc, _, _indentation, parts}, acc), do: parts_of(parts, acc)
+  defp walk({:list_heredoc, _, _indentation, parts}, acc), do: parts_of(parts, acc)
+  defp walk({:sigil, _, _, parts, _, _, _}, acc), do: parts_of(parts, acc)
+  defp walk(tuple, acc) when is_tuple(tuple), do: walk(Tuple.to_list(tuple), acc)
+  defp walk(_, acc), do: acc
+
+  defp parts_of(parts, acc) do
+    Enum.reduce(parts, acc, fn
+      bin, acc when is_binary(bin) -> [bin | acc]
+      {_pos, inner}, acc -> walk(inner, acc)
+      other, acc -> walk(other, acc)
+    end)
+  end
+end
+
+repo = Kino.Input.read(repo_input)
+corpus = Corpus.from_repo(repo)
+
+sizes = Enum.map(corpus, &byte_size/1)
+n = length(corpus)
+total_bytes = Enum.sum(sizes)
+no_bs = Enum.count(corpus, &(:binary.match(&1, "\\") == :nomatch))
+sorted = Enum.sort(sizes)
+p = fn q -> Enum.at(sorted, min(n - 1, trunc(n * q))) end
+
+IO.puts("""
+literals:                 #{n}
+no backslash (fast path): #{no_bs} (#{Float.round(no_bs * 100 / n, 1)}%)
+bytes copied per pass:    #{total_bytes} (#{div(total_bytes, 1024)} kB)
+size p50/p90/p99/max:     #{p.(0.5)} / #{p.(0.9)} / #{p.(0.99)} / #{List.last(sorted)} B
+""")
+```
+
+```elixir
+buckets = [{0, 16}, {16, 64}, {64, 256}, {256, 1024}, {1024, 4096}, {4096, 1_000_000}]
+
+bucket_rows =
+  for {lo, hi} <- buckets do
+    in_b = Enum.filter(corpus, &(byte_size(&1) >= lo and byte_size(&1) < hi))
+    label = if hi == 1_000_000, do: "≥#{lo}", else: "#{lo}–#{hi}"
+    escaped = Enum.count(in_b, &(:binary.match(&1, "\\") != :nomatch))
+
+    %{
+      bucket: label,
+      literals: length(in_b),
+      kB: Float.round(in_b |> Enum.map(&byte_size/1) |> Enum.sum() |> Kernel./(1024), 1),
+      escaped_pct: Float.round(escaped * 100 / max(length(in_b), 1), 1)
+    }
+  end
+
+order = Enum.map(bucket_rows, & &1.bucket)
+
+bar = fn field, title ->
+  Vl.new(width: 300, height: 180, title: title)
+  |> Vl.data_from_values(bucket_rows)
+  |> Vl.mark(:bar, color: "#2a78d6", corner_radius_end: 4)
+  |> Vl.encode_field(:x, "bucket", type: :nominal, sort: order, title: "literal size [B]")
+  |> Vl.encode_field(:y, field, type: :quantitative, title: nil)
+  |> Vl.encode(:tooltip, [[field: "bucket"], [field: field]])
+end
+
+Kino.Layout.grid(
+  [Kino.VegaLite.new(bar.("literals", "how many literals")),
+   Kino.VegaLite.new(bar.("kB", "where the bytes are")),
+   Kino.VegaLite.new(bar.("escaped_pct", "% containing a backslash"))],
+  columns: 3
+)
+```
+
+Most literals are tiny, but the **bytes live in the tail** — the big buckets are
+doc heredocs. The third chart answers the obvious objection up front: **short
+strings are rarely escaped**. Around the 10 B median only ~5% of literals
+contain a backslash, so the most popular sizes are also where the guard misses
+least; the rate climbs with size, yet even the heredoc tail stays ~90%
+escape-free — and that tail is exactly where skipping the copy pays 10–400×.
+
+## 2. Variants
+
+Body copied verbatim from `lib/elixir/src/elixir_interpolation.erl`. Besides the
+proposed patch (B), two refinements: seed the accumulator with the untouched
+prefix via `binary_part` (C), and additionally take the pattern as an argument,
+compiled once per file by the tokenizer (D) — `binary:compile_pattern/1` returns
+a reference, so it cannot be a module constant.
+
+```elixir
+unescape_src = ~S"""
+-module(bench_unescape).
+-export([base/1, guard/1, prefix/1, arg_prefix/2, map/1,
+         bm_base/1, bm_guard/1, bm_prefix/1, bm_arg/1,
+         pass_base/1, pass_guard/1, pass_prefix/1, pass_arg/1]).
+
+-define(is_digit(S), (S >= $0 andalso S =< $9)).
+-define(is_hex(S), (?is_digit(S) orelse (S >= $A andalso S =< $F) orelse (S >= $a andalso S =< $f))).
+
+%% A: upstream — always rebuilds the binary.
+base(String) -> unescape_chars(String, fun map/1, <<>>).
+
+%% B: the proposed patch.
+guard(String) ->
+  case binary:match(String, <<$\\>>) of
+    nomatch -> String;
+    _ -> unescape_chars(String, fun map/1, <<>>)
+  end.
+
+%% C: the match already says where the first escape is — copy the prefix in one go.
+prefix(String) ->
+  case binary:match(String, <<$\\>>) of
+    nomatch -> String;
+    {Pos, _} ->
+      <<Prefix:Pos/binary, Rest/binary>> = String,
+      unescape_chars(Rest, fun map/1, Prefix)
+  end.
+
+%% D: pattern compiled once by the caller (the tokenizer would thread it through).
+arg_prefix(String, Pattern) ->
+  case binary:match(String, Pattern) of
+    nomatch -> String;
+    {Pos, _} ->
+      <<Prefix:Pos/binary, Rest/binary>> = String,
+      unescape_chars(Rest, fun map/1, Prefix)
+  end.
+
+%% ---- benchmark entry points -------------------------------------------------
+%% Livebook cells are interpreted; anonymous fns handed to Benchee run through
+%% the evaluator and distort the numbers. These keep the hot loop compiled, so
+%% Benchee jobs are plain captures.
+
+%% per-literal jobs; input is {Pattern, String} so D gets its precompiled pattern
+bm_base({_P, S}) -> base(S).
+bm_guard({_P, S}) -> guard(S).
+bm_prefix({_P, S}) -> prefix(S).
+bm_arg({P, S}) -> arg_prefix(S, P).
+
+%% whole-corpus jobs; pass_arg compiles the pattern once per pass, which is the
+%% real design (the tokenizer would compile it once per file)
+pass_base(List) -> lists:foreach(fun base/1, List).
+pass_guard(List) -> lists:foreach(fun guard/1, List).
+pass_prefix(List) -> lists:foreach(fun prefix/1, List).
+pass_arg(List) ->
+  P = binary:compile_pattern(<<$\\>>),
+  lists:foreach(fun(S) -> arg_prefix(S, P) end, List).
+
+%% ---- verbatim from elixir_interpolation.erl --------------------------------
+
+unescape_chars(<<$\\, $x, Rest/binary>>, Map, Acc) ->
+  case Map(hex) of
+    true  -> unescape_hex(Rest, Map, Acc);
+    false -> unescape_chars(Rest, Map, <<Acc/binary, $\\, $x>>)
+  end;
+unescape_chars(<<$\\, $u, Rest/binary>>, Map, Acc) ->
+  case Map(unicode) of
+    true  -> unescape_unicode(Rest, Map, Acc);
+    false -> unescape_chars(Rest, Map, <<Acc/binary, $\\, $u>>)
+  end;
+unescape_chars(<<$\\, $\n, Rest/binary>>, Map, Acc) ->
+  case Map(newline) of
+    true  -> unescape_chars(Rest, Map, Acc);
+    false -> unescape_chars(Rest, Map, <<Acc/binary, $\\, $\n>>)
+  end;
+unescape_chars(<<$\\, $\r, $\n, Rest/binary>>, Map, Acc) ->
+  case Map(newline) of
+    true  -> unescape_chars(Rest, Map, Acc);
+    false -> unescape_chars(Rest, Map, <<Acc/binary, $\\, $\r, $\n>>)
+  end;
+unescape_chars(<<$\\, Escaped, Rest/binary>>, Map, Acc) ->
+  case Map(Escaped) of
+    false -> unescape_chars(Rest, Map, <<Acc/binary, $\\, Escaped>>);
+    Other -> unescape_chars(Rest, Map, <<Acc/binary, Other>>)
+  end;
+unescape_chars(<<Char, Rest/binary>>, Map, Acc) ->
+  unescape_chars(Rest, Map, <<Acc/binary, Char>>);
+unescape_chars(<<>>, _Map, Acc) -> Acc.
+
+unescape_hex(<<A, B, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B) ->
+  unescape_chars(Rest, Map, <<Acc/binary, (list_to_integer([A, B], 16))>>);
+unescape_hex(<<_/binary>>, _Map, _Acc) ->
+  throw({error, "invalid hex escape character", "\\x"}).
+
+unescape_unicode(<<A, B, C, D, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B), ?is_hex(C), ?is_hex(D) ->
+  append_codepoint(Rest, Map, [A, B, C, D], Acc, 16);
+unescape_unicode(<<${, A, $}, Rest/binary>>, Map, Acc) when ?is_hex(A) ->
+  append_codepoint(Rest, Map, [A], Acc, 16);
+unescape_unicode(<<${, A, B, $}, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B) ->
+  append_codepoint(Rest, Map, [A, B], Acc, 16);
+unescape_unicode(<<${, A, B, C, $}, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B), ?is_hex(C) ->
+  append_codepoint(Rest, Map, [A, B, C], Acc, 16);
+unescape_unicode(<<${, A, B, C, D, $}, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B), ?is_hex(C), ?is_hex(D) ->
+  append_codepoint(Rest, Map, [A, B, C, D], Acc, 16);
+unescape_unicode(<<${, A, B, C, D, E, $}, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B), ?is_hex(C), ?is_hex(D), ?is_hex(E) ->
+  append_codepoint(Rest, Map, [A, B, C, D, E], Acc, 16);
+unescape_unicode(<<${, A, B, C, D, E, F, $}, Rest/binary>>, Map, Acc) when ?is_hex(A), ?is_hex(B), ?is_hex(C), ?is_hex(D), ?is_hex(E), ?is_hex(F) ->
+  append_codepoint(Rest, Map, [A, B, C, D, E, F], Acc, 16);
+unescape_unicode(<<_/binary>>, _Map, _Acc) ->
+  throw({error, "invalid Unicode escape character", "\\u"}).
+
+append_codepoint(Rest, Map, List, Acc, Base) ->
+  Codepoint = list_to_integer(List, Base),
+  try <<Acc/binary, Codepoint/utf8>> of
+    Binary -> unescape_chars(Rest, Map, Binary)
+  catch
+    error:badarg -> throw({error, "invalid or reserved Unicode code point", "\\u"})
+  end.
+
+map(newline) -> true;
+map(unicode) -> true;
+map(hex) -> true;
+map($0) -> 0;
+map($a) -> 7;
+map($b) -> $\b;
+map($d) -> $\d;
+map($e) -> $\e;
+map($f) -> $\f;
+map($n) -> $\n;
+map($r) -> $\r;
+map($s) -> $\s;
+map($t) -> $\t;
+map($v) -> $\v;
+map(E)  -> E.
+"""
+
+path = Path.join(System.tmp_dir!(), "bench_unescape.erl")
+File.write!(path, unescape_src)
+{:ok, mod, beam} = :compile.file(String.to_charlist(path), [:binary, :return_errors])
+{:module, ^mod} = :code.load_binary(mod, String.to_charlist(path), beam)
+
+pattern = :binary.compile_pattern("\\")
+
+variants = [
+  {"A current (copy all)", &:bench_unescape.base/1},
+  {"B skip if no \\", &:bench_unescape.guard/1},
+  {"C + prefix copy", &:bench_unescape.prefix/1},
+  {"D + compiled pattern", fn s -> :bench_unescape.arg_prefix(s, pattern) end}
+]
+
+# sigils carry their own maps (~r has hex: false), so a handful of literals are
+# invalid under the default map — drop them (~0.02%)
+{bench_corpus, skipped} =
+  Enum.split_with(corpus, fn s ->
+    try do
+      :bench_unescape.base(s)
+      true
+    catch
+      _, _ -> false
+    end
+  end)
+
+for s <- bench_corpus, {name, f} <- variants, f.(s) != :bench_unescape.base(s) do
+  raise "#{name} disagrees on #{inspect(s)}"
+end
+
+"#{length(bench_corpus)} literals (#{length(skipped)} skipped), all variants agree"
+```
+
+## 3. One pass over the whole repo
+
+The closest thing to "what a compile actually pays".
+
+```elixir
+repo_suite =
+  Benchee.run(
+    %{
+      "A current (copy all)" => &:bench_unescape.pass_base/1,
+      "B skip if no \\" => &:bench_unescape.pass_guard/1,
+      "C + prefix copy" => &:bench_unescape.pass_prefix/1,
+      "D + compiled pattern" => &:bench_unescape.pass_arg/1
+    },
+    inputs: %{"whole repo" => bench_corpus},
+    time: 2,
+    warmup: 1,
+    memory_time: 1,
+    print: [benchmarking: false, configuration: false, fast_warning: false]
+  )
+
+repo_rows =
+  for s <- repo_suite.scenarios do
+    %{
+      variant: s.job_name,
+      ms: Float.round(s.run_time_data.statistics.average / 1_000_000, 2),
+      mb: Float.round((s.memory_usage_data.statistics.average || 0) / 1_048_576, 1)
+    }
+  end
+
+base_ms = Enum.find(repo_rows, &(&1.variant == "A current (copy all)")).ms
+
+repo_rows =
+  Enum.map(repo_rows, &Map.put(&1, :speedup, "#{Float.round(base_ms / &1.ms, 2)}×"))
+
+hbar = fn field, title ->
+  Vl.new(width: 300, height: 140, title: title)
+  |> Vl.data_from_values(repo_rows)
+  |> Vl.mark(:bar, corner_radius_end: 4)
+  |> Vl.encode_field(:y, "variant", type: :nominal, sort: Enum.map(palette, &elem(&1, 0)), title: nil)
+  |> Vl.encode_field(:x, field, type: :quantitative, title: nil)
+  |> Vl.encode(:color, color ++ [legend: nil])
+  |> Vl.encode(:tooltip, [[field: "variant"], [field: field], [field: "speedup"]])
+end
+
+Kino.Layout.grid(
+  [Kino.VegaLite.new(hbar.("ms", "time per pass [ms]")),
+   Kino.VegaLite.new(hbar.("mb", "allocations per pass [MB]"))],
+  columns: 2
+)
+```
+
+```elixir
+Kino.DataTable.new(repo_rows, keys: [:variant, :ms, :speedup, :mb])
+```
+
+The memory column is the headline: the copies for tens of thousands of literals
+simply stop being allocated.
+
+## 4. Scaling with literal size
+
+Escape-free strings — the ~95% case. Log–log: the current code is a straight
+line, the guarded variants flatten to the cost of one scan.
+
+```elixir
+sweep_sizes = [4, 16, 64, 256, 1024, 4096, 16384]
+
+# per-literal jobs: compiled entry points taking {pattern, string}
+bm_jobs = %{
+  "A current (copy all)" => &:bench_unescape.bm_base/1,
+  "B skip if no \\" => &:bench_unescape.bm_guard/1,
+  "C + prefix copy" => &:bench_unescape.bm_prefix/1,
+  "D + compiled pattern" => &:bench_unescape.bm_arg/1
+}
+
+sweep_suite =
+  Benchee.run(bm_jobs,
+    inputs: Map.new(sweep_sizes, fn n -> {"#{n}", {pattern, :binary.copy("a", n)}} end),
+    time: 0.5,
+    warmup: 0.2,
+    print: [benchmarking: false, configuration: false, fast_warning: false]
+  )
+
+sweep_rows =
+  for s <- sweep_suite.scenarios do
+    %{
+      variant: s.job_name,
+      bytes: String.to_integer(s.input_name),
+      ns: Float.round(s.run_time_data.statistics.average, 1),
+      med: Float.round(s.run_time_data.statistics.median * 1.0, 1)
+    }
+  end
+
+Vl.new(width: 560, height: 300, title: "escape-free literal: avg ns per call")
+|> Vl.data_from_values(sweep_rows)
+|> Vl.mark(:line, point: true, stroke_width: 2)
+|> Vl.encode_field(:x, "bytes", type: :quantitative, scale: [type: :log], title: "literal size [B]")
+|> Vl.encode_field(:y, "ns", type: :quantitative, scale: [type: :log], title: "ns per call")
+|> Vl.encode(:color, color)
+|> Vl.encode(:tooltip, [[field: "variant"], [field: "bytes"], [field: "ns"]])
+```
+
+## 5. When the guard misses
+
+A literal that does contain an escape — the guard is pure overhead when the
+escape sits at byte 0, and prefix seeding starts paying the further in it sits.
+The payload is editable (prefilled to ~100 B): `\n` is inserted at the start,
+the middle, and the end, so any string of your own can be tested. Type it as it
+appears in source, **before** unescaping — a `\` in the box is a literal
+backslash byte, exactly what `unescape_chars/2` receives from the tokenizer.
+
+```elixir
+miss_payload_input = Kino.Input.textarea("payload to test", default: String.duplicate("a", 98))
+```
+
+```elixir
+payload = Kino.Input.read(miss_payload_input)
+mid = div(byte_size(payload), 2)
+<<front::binary-size(^mid), back::binary>> = payload
+
+case :binary.match(payload, "\\") do
+  :nomatch ->
+    IO.puts("payload: #{byte_size(payload)} B, no backslash — on its own it would take the fast path")
+
+  {pos, _} ->
+    IO.puts("payload: #{byte_size(payload)} B, has a backslash of its own at byte #{pos}")
+end
+
+unescaped =
+  try do
+    :bench_unescape.base("\\n" <> payload)
+  catch
+    {:error, msg, tok} ->
+      raise "payload contains an invalid escape (#{msg} #{tok}) — fix it before benchmarking"
+  end
+
+IO.puts("start-escaped variant unescapes to: #{inspect(unescaped)}")
+
+miss_inputs = %{
+  "escape at start" => {pattern, "\\n" <> payload},
+  "escape at middle" => {pattern, front <> "\\n" <> back},
+  "escape at end" => {pattern, payload <> "\\n"}
+}
+
+miss_suite =
+  Benchee.run(bm_jobs,
+    inputs: miss_inputs,
+    time: 0.5,
+    warmup: 0.2,
+    print: [benchmarking: false, configuration: false, fast_warning: false]
+  )
+
+miss_rows =
+  for s <- miss_suite.scenarios do
+    %{variant: s.job_name, input: s.input_name, ns: Float.round(s.run_time_data.statistics.median * 1.0, 1)}
+  end
+
+Vl.new(width: 460, height: 240,
+  title: "#{byte_size(payload) + 2} B literal WITH an escape: median ns per call")
+|> Vl.data_from_values(miss_rows)
+|> Vl.mark(:bar, corner_radius_end: 4)
+|> Vl.encode_field(:x, "input", type: :nominal,
+    sort: ["escape at start", "escape at middle", "escape at end"], title: nil)
+|> Vl.encode_field(:x_offset, "variant", type: :nominal)
+|> Vl.encode_field(:y, "ns", type: :quantitative, title: "ns per call")
+|> Vl.encode(:color, color)
+|> Vl.encode(:tooltip, [[field: "variant"], [field: "input"], [field: "ns"]])
+```
+
+The same question across sizes, read exactly like the chart in section 4: the
+gray line is the current code, and every input here **does contain an escape**.
+Left panel — escape at the very first byte, the honest worst case: the guarded
+lines sit slightly above gray at small sizes (the flat guard cost) and converge
+onto it as the copy dominates. Right panel — escape at the very last byte: B
+still tracks gray, but C and D drop far below it, because the prefix copy
+replaces almost the whole byte loop. The middle panel is yours: the slider sets
+how far into the literal the escape sits — re-run the cell after dragging.
+
+```elixir
+escape_pos_input =
+  Kino.Input.range("escape position, % into the literal", min: 0, max: 100, step: 5, default: 50)
+```
+
+```elixir
+pct = round(Kino.Input.read(escape_pos_input))
+
+miss_sweep_inputs =
+  for n <- sweep_sizes,
+      {scen, s} <- [
+        {"escape at first byte", "\\n" <> :binary.copy("a", max(n - 2, 0))},
+        {"escape at #{pct}%",
+         :binary.copy("a", max(div(n * pct, 100) - 2, 0)) <>
+           "\\n" <> :binary.copy("a", max(n - div(n * pct, 100), 0))},
+        {"escape at last byte", :binary.copy("a", max(n - 2, 0)) <> "\\n"}
+      ],
+      into: %{} do
+    {"#{scen}|#{n}", {pattern, s}}
+  end
+
+miss_sweep_suite =
+  Benchee.run(bm_jobs,
+    inputs: miss_sweep_inputs,
+    time: 0.3,
+    warmup: 0.1,
+    print: [benchmarking: false, configuration: false, fast_warning: false]
+  )
+
+miss_sweep_rows =
+  for s <- miss_sweep_suite.scenarios do
+    [scen, bytes] = String.split(s.input_name, "|")
+
+    %{
+      variant: s.job_name,
+      scenario: scen,
+      bytes: String.to_integer(bytes),
+      ns: s.run_time_data.statistics.average,
+      med: s.run_time_data.statistics.median * 1.0
+    }
+  end
+
+miss_sweep_rows =
+  Enum.map(miss_sweep_rows, &Map.update!(&1, :ns, fn ns -> Float.round(ns * 1.0, 1) end))
+
+Vl.new(columns: 3, title: "literal WITH an escape: avg ns per call (gray = current)")
+|> Vl.data_from_values(miss_sweep_rows)
+|> Vl.facet(
+  [field: "scenario", title: nil,
+   sort: ["escape at first byte", "escape at #{pct}%", "escape at last byte"]],
+  Vl.new(width: 300, height: 220)
+  |> Vl.mark(:line, point: true, stroke_width: 2)
+  |> Vl.encode_field(:x, "bytes", type: :quantitative, scale: [type: :log], title: "literal size [B]")
+  |> Vl.encode_field(:y, "ns", type: :quantitative, scale: [type: :log], title: "ns per call")
+  |> Vl.encode(:color, color)
+  |> Vl.encode(:tooltip, [[field: "variant"], [field: "bytes"], [field: "ns"]])
+)
+```
+
+## 6. Where the time goes — flame view
+
+`:tprof` (OTP stdlib) traces both variants on a 16 kB literal, with and without
+an escape in the middle. All four bars share one scale, so width is directly
+comparable. Both functions are tail-recursive, so a full flamegraph has exactly
+these frames; tprof's per-call trace overhead inflates the recursive loop, so
+read **proportions**, not absolute µs.
+
+```elixir
+profile = fn fun ->
+  {_result, {:call_time, data}} = :tprof.profile(fun, %{type: :call_time, report: :return})
+
+  for {mod, f, a, samples} <- data,
+      {mod, f} in [{:bench_unescape, :unescape_chars}, {:binary, :match}],
+      {_pid, count, us} <- samples do
+    %{fun: "#{mod}:#{f}/#{a}", count: count, us: us}
+  end
+  |> Enum.sort_by(& &1.fun, :desc)
+end
+
+clean16k = :binary.copy("a", 16384)
+esc_mid = :binary.copy("a", 8191) <> "\\n" <> :binary.copy("a", 8192)
+
+flames =
+  for {label, fun} <- [
+        {"A current (copy all) — clean", fn -> :bench_unescape.base(clean16k) end},
+        {"D fast path — clean", fn -> :bench_unescape.arg_prefix(clean16k, pattern) end},
+        {"A current (copy all) — escape in the middle", fn -> :bench_unescape.base(esc_mid) end},
+        {"D fast path — escape in the middle", fn -> :bench_unescape.arg_prefix(esc_mid, pattern) end}
+      ] do
+    {label, profile.(fun)}
+  end
+
+max_total =
+  flames |> Enum.map(fn {_, rows} -> rows |> Enum.map(& &1.us) |> Enum.sum() end) |> Enum.max()
+
+fun_color = %{"binary:match/2" => "#2a78d6", "bench_unescape:unescape_chars/3" => "#eb6834"}
+
+blocks =
+  for {label, rows} <- flames do
+    total = rows |> Enum.map(& &1.us) |> Enum.sum()
+
+    segs =
+      Enum.map_join(rows, fn r ->
+        w = max(Float.round(r.us * 100 / max_total, 2), 0.4)
+
+        ~s(<div title="#{r.fun} — #{r.us} µs, #{r.count} calls" ) <>
+          ~s(style="width:#{w}%;background:#{fun_color[r.fun]};height:26px;margin-right:2px;) <>
+          ~s(border-radius:3px;color:#fff;font:11px monospace;overflow:hidden;) <>
+          ~s(white-space:nowrap;padding:5px 4px 0;box-sizing:border-box">#{r.fun} · #{r.us} µs · #{r.count} calls</div>)
+      end)
+
+    ~s(<div style="margin:14px 0 4px;font:12px sans-serif">#{label} — #{total} µs traced</div>) <>
+      ~s(<div style="display:flex">#{segs}</div>)
+  end
+
+Kino.HTML.new(
+  ~s(<div style="max-width:760px">#{Enum.join(blocks)}</div>) <>
+    ~s(<div style="margin-top:10px;font:11px sans-serif;color:#888">) <>
+    ~s(blue = binary:match/2 · orange = unescape_chars/3 · shared scale · hover for details</div>)
+)
+```
+
+The picture the reader should take away: on a clean literal the current code is
+one wide orange bar of 16 385 loop iterations; the fast path is a blue sliver —
+one `binary:match/2` call. With an escape in the middle, the fast path pays the
+sliver and half the orange bar.
+
+## 7. When does it pay off — and would a `byte_size` cutoff help?
+
+A two-parameter model from the measured sweep: copying costs ~`a` ns/byte, the
+guarded scan ~`s` ns/byte, and a missed guard a flat ~`g` ns.
+
+```elixir
+# the model uses medians: these jobs run in tens of ns, where Benchee averages
+# are dominated by GC/scheduler outliers — differences of averages come out garbage
+sw = Map.new(sweep_rows, fn r -> {{r.variant, r.bytes}, r.med} end)
+miss = Map.new(miss_sweep_rows, fn r -> {{r.variant, r.scenario, r.bytes}, r.med} end)
+
+a_slope = (sw[{"A current (copy all)", 16384}] - sw[{"A current (copy all)", 256}]) / (16384 - 256)
+s_slope = (sw[{"B skip if no \\", 16384}] - sw[{"B skip if no \\", 256}]) / (16384 - 256)
+# the flat miss cost (~tens of ns) must be measured on SMALL inputs — at 4 kB
+# it would be a difference of two ~40 µs numbers and drown in benchmark noise
+g_flat =
+  [4, 16, 64]
+  |> Enum.map(fn b ->
+    miss[{"B skip if no \\", "escape at first byte", b}] -
+      miss[{"A current (copy all)", "escape at first byte", b}]
+  end)
+  |> Enum.sort()
+  |> Enum.at(1)
+  |> max(0.0)
+
+crossover = Enum.find(sweep_sizes, fn n -> sw[{"B skip if no \\", n}] < sw[{"A current (copy all)", n}] end)
+
+hit_rate = no_bs / n
+
+expected_saving = fn bytes ->
+  hit_rate * (a_slope - s_slope) * bytes - (1 - hit_rate) * g_flat
+end
+
+IO.puts("""
+copying one byte in the loop:      a ≈ #{Float.round(a_slope, 2)} ns per byte
+scanning one byte (binary:match):  s ≈ #{Float.round(s_slope, 4)} ns per byte
+one missed guard (flat):           g ≈ #{Float.round(g_flat, 0)} ns per literal
+measured crossover on clean literals: #{crossover} B
+break-even for a literal of unknown content: #{Float.round(g_flat * (1 - hit_rate) / (hit_rate * (a_slope - s_slope)), 2)} B
+expected saving at the median (#{p.(0.5)} B): #{Float.round(expected_saving.(p.(0.5)), 0)} ns/literal
+expected saving at p99 (#{p.(0.99)} B): #{Float.round(expected_saving.(p.(0.99)), 0)} ns/literal
+""")
+```
+
+With a 94% hit rate the expected value is positive from a few bytes up, so a
+`byte_size(String) > X` cutoff buys almost nothing on this corpus. It is worth
+one sentence in the proposal, though: for a codebase where most literals *do*
+contain escapes, exempting literals below the break-even size (a few dozen
+bytes) would cap the only regression this change has — a suggestion to mention,
+not necessarily to implement.
+
+## Conclusions
+
+* ~95% of real literals contain no escape, and the bytes concentrate in large,
+  escape-free doc heredocs — the fast path hits almost always, exactly where it
+  pays the most.
+* The one-line guard (B) already wins the whole-repo pass; seeding the
+  accumulator with the prefix (C) and compiling the pattern once per file (D)
+  each buy a further step, and D removes the per-call pattern compile entirely.
+* Worst case — an escape at the first byte — costs a flat ~70–90 ns: up to
+  ~1.7× on a 4-byte literal, within noise from ~256 B up. Only ~6% of real
+  literals miss at all, and prefix seeding turns a late escape into a win
+  instead (up to ~1000× on a 16 kB literal ending in one).
+* Allocations drop by an order of magnitude: escape-free literals are returned
+  as-is instead of being copied.
+* The returned binary may be a sub-binary referencing a larger one; tokens
+  arrive via `characters_to_binary` and module literals are copied into beam
+  chunks, so this does not extend lifetimes in practice.
