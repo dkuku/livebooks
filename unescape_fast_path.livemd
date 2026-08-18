@@ -58,6 +58,13 @@ unescape_chars(String, Map) ->
 The pattern is a single byte, so `binary:match/2` compiles it cheaply and scans
 memchr-style — none of the multi-pattern caveats apply.
 
+The proposal started from `URI.decode_www_form/1`. `unescape_chars/2` is what
+gets benchmarked here because the compiler supplies a measurable real-world
+corpus — every string literal in every compiled file — whereas www-form inputs
+vary by application. For `URI.decode/1` the fast path is the same one-liner
+with `%` in place of `\`; `decode_www_form/1` also rewrites `+`, which changes
+the picture — see the appendix at the end.
+
 ## 1. What the compiler actually unescapes
 
 Tokenizing with `unescape: false` collects exactly the raw binaries handed to
@@ -695,15 +702,109 @@ not necessarily to implement.
 * ~95% of real literals contain no escape, and the bytes concentrate in large,
   escape-free doc heredocs — the fast path hits almost always, exactly where it
   pays the most.
-* The one-line guard (B) already wins the whole-repo pass; seeding the
-  accumulator with the prefix (C) and compiling the pattern once per file (D)
-  each buy a further step, and D removes the per-call pattern compile entirely.
-* Worst case — an escape at the first byte — costs a flat ~70–90 ns: up to
-  ~1.7× on a 4-byte literal, within noise from ~256 B up. Only ~6% of real
-  literals miss at all, and prefix seeding turns a late escape into a win
+* The one-line guard (B) already wins the whole-repo pass ~6× with ~8× fewer
+  allocations; prefix seeding (C) takes it to ~10×, and the precompiled
+  pattern (D) to ~13× with ~16× fewer allocations. The C→D delta (~55 ns per
+  literal) is exactly the per-call pattern compile — the part the recent OTP
+  PR precompiling literal patterns at load time removes for free.
+* Worst case — an escape at the first byte — costs a flat ~100 ns: about 2×
+  on a 4-byte literal, within noise from a few hundred bytes up. Only ~6% of
+  real literals miss at all, and prefix seeding turns a late escape into a win
   instead (up to ~1000× on a 16 kB literal ending in one).
 * Allocations drop by an order of magnitude: escape-free literals are returned
   as-is instead of being copied.
 * The returned binary may be a sub-binary referencing a larger one; tokens
   arrive via `characters_to_binary` and module literals are copied into beam
   chunks, so this does not extend lifetimes in practice.
+
+## Appendix: decode_www_form needs two characters
+
+`URI.decode/1` only rewrites `%`, so its guard is the same single-byte
+one-liner as above. `URI.decode_www_form/1` also rewrites `+` — and a
+two-pattern `binary:match` is a different beast: with more than one pattern the
+scan switches from a memchr-style single-byte search to Aho–Corasick, which
+walks the input byte by byte. Precompiling the pattern does not rescue the
+scan — the compile is not where the time goes. The guard that stays fast is
+**two sequential single-byte scans**: return the input as-is only when both
+miss (and on a hit, the earlier of the two positions still seeds the prefix).
+Today's `URI.decode_www_form/1` is included as the baseline — on a clean input
+it pays the full byte-by-byte copy that every guard above replaces.
+
+A note on input sizes: `decode_www_form` runs per *value* (bodies are split on
+`&`/`=` first), so 100 B is the typical case. Values containing spaces miss
+the guard by construction — spaces arrive as `+` or `%20` — which means the
+fast path's territory is machine-generated values: ids, hashes, hex digests,
+base64url tokens. That is also exactly where large clean values come from
+(JWTs in OAuth form posts run 1–8 kB), hence the 2 kB input; 16 kB is there to
+expose how the scans *scale*, not as a typical payload.
+
+```elixir
+www_src = ~S"""
+-module(bench_www).
+-export([current/1, single_compile/1, multi_compile/1, single_pre/1, multi_pre/1, two_scans/1]).
+
+%% today's stdlib code: unpercent copies byte by byte even when clean
+current({_Ps, S}) -> 'Elixir.URI':decode_www_form(S).
+
+%% every entry point takes {Patterns, String} so each Benchee job is a plain
+%% compiled capture — a closure over the patterns would run through Livebook's
+%% evaluator and add ~400 ns per call, drowning the fast scans
+single_compile({_Ps, S}) -> binary:match(S, <<$%>>).
+multi_compile({_Ps, S}) -> binary:match(S, [<<$%>>, <<$+>>]).
+single_pre({{Pct, _Plus, _Both}, S}) -> binary:match(S, Pct).
+multi_pre({{_Pct, _Plus, Both}, S}) -> binary:match(S, Both).
+two_scans({{Pct, Plus, _Both}, S}) ->
+  case binary:match(S, Pct) of
+    nomatch -> binary:match(S, Plus);
+    Found -> Found
+  end.
+"""
+
+www_path = Path.join(System.tmp_dir!(), "bench_www.erl")
+File.write!(www_path, www_src)
+{:ok, www_mod, www_beam} = :compile.file(String.to_charlist(www_path), [:binary, :return_errors])
+{:module, ^www_mod} = :code.load_binary(www_mod, String.to_charlist(www_path), www_beam)
+
+www_patterns = {
+  :binary.compile_pattern("%"),
+  :binary.compile_pattern("+"),
+  :binary.compile_pattern(["%", "+"])
+}
+
+www_suite =
+  Benchee.run(
+    %{
+      "current URI.decode_www_form" => &:bench_www.current/1,
+      "single %, compile per call" => &:bench_www.single_compile/1,
+      "multi [%,+], compile per call" => &:bench_www.multi_compile/1,
+      "single %, precompiled" => &:bench_www.single_pre/1,
+      "multi [%,+], precompiled" => &:bench_www.multi_pre/1,
+      "two single scans, precompiled" => &:bench_www.two_scans/1
+    },
+    inputs: %{
+      "1: 100 B clean" => {www_patterns, :binary.copy("a", 100)},
+      "2: 2 kB clean (JWT-sized)" => {www_patterns, :binary.copy("a", 2048)},
+      "3: 16 kB clean" => {www_patterns, :binary.copy("a", 16384)}
+    },
+    time: 0.5,
+    warmup: 0.2,
+    print: [benchmarking: false, configuration: false, fast_warning: false]
+  )
+
+www_rows =
+  for s <- www_suite.scenarios do
+    %{input: s.input_name, guard: s.job_name, median_ns: Float.round(s.run_time_data.statistics.median * 1.0, 1)}
+  end
+
+Kino.DataTable.new(Enum.sort_by(www_rows, &{&1.input, &1.median_ns}), keys: [:input, :guard, :median_ns])
+```
+
+Two consequences for the proposals:
+
+* the `decode_www_form` fast path must be written as two single-byte scans,
+  never as `binary:match(S, ["%", "+"])` — the multi-pattern scan is ~200×
+  slower per byte and would eat the entire gain on long clean inputs;
+* precompilation (proposal 2) still matters for short inputs — the per-call
+  compile is a meaningful share of a ~30 ns scan — but it cannot make the
+  multi-pattern path competitive, so it complements the two-scan shape rather
+  than replacing it.
